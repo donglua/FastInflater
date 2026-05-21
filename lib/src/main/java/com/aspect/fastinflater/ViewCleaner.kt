@@ -24,7 +24,9 @@ object ViewCleaner {
         view.setOnTouchListener(null)
         view.setOnKeyListener(null)
         view.setOnFocusChangeListener(null)
-        view.tag = null
+        // 不清除 tag：DataBinding 依赖 view tag 存储 binding 信息
+        // 如果清除会导致 DataBindingUtil.bind() 返回 null
+        // view.tag = null
         view.translationX = 0f
         view.translationY = 0f
         view.translationZ = 0f
