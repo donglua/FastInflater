@@ -21,4 +21,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.annotation:annotation:1.7.1")
     compileOnly("androidx.databinding:databinding-runtime:8.2.0")
+    compileOnly("androidx.recyclerview:recyclerview:1.3.2")
 }
