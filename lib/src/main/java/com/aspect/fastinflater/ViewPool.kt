@@ -12,6 +12,7 @@ import java.util.concurrent.Executors
 class ViewPool {
 
     private val pool = ConcurrentHashMap<PoolKey, ConcurrentLinkedDeque<View>>()
+    private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
     private val executor = Executors.newFixedThreadPool(
         (Runtime.getRuntime().availableProcessors() - 1).coerceAtLeast(2)
     )
@@ -22,17 +23,31 @@ class ViewPool {
         maxPoolSize = size
     }
 
+    fun registerPolicy(@LayoutRes layoutId: Int, policy: ViewRecyclePolicy) {
+        policies[layoutId] = policy
+    }
+
     fun obtain(@LayoutRes layoutId: Int, context: Context, parent: ViewGroup? = null): View? {
         val key = PoolKey(layoutId, fingerprint(context))
         return pool[key]?.poll()?.also { view ->
-            ViewCleaner.clean(view)
+            val policy = policies[layoutId]
+            if (policy != null) {
+                policy.onObtain(view)
+            } else {
+                ViewCleaner.clean(view)
+            }
         }
     }
 
     fun recycle(@LayoutRes layoutId: Int, view: View) {
+        val policy = policies[layoutId]
+        if (policy != null && !policy.canRecycle(view)) {
+            return // 丢弃不可回收的 View
+        }
         val key = PoolKey(layoutId, fingerprint(view.context))
         val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
         if (deque.size < maxPoolSize) {
+            policy?.onRecycle(view) ?: ViewCleaner.clean(view)
             deque.offer(view)
         }
     }

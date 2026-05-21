@@ -14,15 +14,22 @@ class FastInflater private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val viewPool = ViewPool()
     private val registry = GeneratedLayoutRegistry()
-    private val asyncExecutor = Executors.newFixedThreadPool(
-        (Runtime.getRuntime().availableProcessors() - 1).coerceAtLeast(2)
-    )
+    // 单线程避免 LayoutInflater 并发访问 Resources 的线程安全问题（Android 8.x 及以下）
+    private val asyncExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "FastInflater-async").apply { isDaemon = true }
+    }
 
     fun registry(): GeneratedLayoutRegistry = registry
 
+    fun registerPolicy(@LayoutRes layoutId: Int, policy: ViewRecyclePolicy) {
+        viewPool.registerPolicy(layoutId, policy)
+    }
+
     init {
         appContext.registerComponentCallbacks(object : ComponentCallbacks2 {
-            override fun onConfigurationChanged(newConfig: Configuration) {}
+            override fun onConfigurationChanged(newConfig: Configuration) {
+                viewPool.clear()
+            }
             override fun onLowMemory() = viewPool.clear()
             override fun onTrimMemory(level: Int) {
                 if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
