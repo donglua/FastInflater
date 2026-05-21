@@ -1,8 +1,32 @@
 # FastInflater
 
+[![CI](https://github.com/donglua/FastInflater/actions/workflows/ci.yml/badge.svg)](https://github.com/donglua/FastInflater/actions/workflows/ci.yml)
+
 高性能 Android 布局加载框架，通过 View 池化复用 + 智能预热 + 异步 inflate，从根本上解决 `LayoutInflater` 的性能瓶颈。
 
 **适用场景：** 仍在维护大量 XML 布局的 Android 项目（尤其是 RecyclerView 密集列表场景）。如果你的项目已全面迁移到 Jetpack Compose，则不需要这个库。
+
+## 引入
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        maven {
+            url = uri("https://maven.pkg.github.com/donglua/FastInflater")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orNull ?: System.getenv("GITHUB_ACTOR")
+                password = providers.gradleProperty("gpr.token").orNull ?: System.getenv("GITHUB_TOKEN")
+            }
+        }
+    }
+}
+
+// build.gradle.kts
+dependencies {
+    implementation("com.github.donglua:fast-inflater:0.1.0")
+}
+```
 
 ## 为什么需要 FastInflater
 
