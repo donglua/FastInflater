@@ -121,7 +121,7 @@ FastInflater.get().inflateAsync(context, R.layout.item_feed, parent) { view ->
 
 ### RecyclerView 集成
 
-最简单的方式——一行代码：
+预热 + 一行代码安装：
 
 ```kotlin
 FastRecycledViewPool.install(recyclerView, warmUpLayouts = listOf(
@@ -129,16 +129,20 @@ FastRecycledViewPool.install(recyclerView, warmUpLayouts = listOf(
 ))
 ```
 
-让 `getItemViewType()` 返回 layoutId（这是常见做法），回收时自动进入 FastInflater 的池：
+Adapter 中让 `viewType == layoutId`，`onCreateViewHolder` 通过 FastInflater 创建 View。
+预热池有缓存时直接返回，无需 inflate：
 
 ```kotlin
 override fun getItemViewType(position: Int) = R.layout.item_feed
 
 override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MyViewHolder {
+    // 池命中时零耗时，未命中时正常 inflate
     val view = FastInflater.get().inflate(parent, viewType)
     return MyViewHolder(view)
 }
 ```
+
+设计原则：RecyclerView 自身的回收机制不变，FastInflater 只在"创建侧"加速——不会出现同一个 View 被两个池同时持有的问题。
 
 ### DataBinding
 

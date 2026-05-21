@@ -1,63 +1,51 @@
 package com.aspect.fastinflater
 
 import android.content.Context
-import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.LayoutRes
 import androidx.recyclerview.widget.RecyclerView
 
 /**
- * 对接 RecyclerView 的 ViewPool，自动利用 FastInflater 的池化能力。
+ * 对接 RecyclerView 的 ViewPool，利用 FastInflater 的预热池加速 ViewHolder 创建。
+ *
+ * 设计原则：
+ * - RecyclerView 自己的回收机制不变（putRecycledView 完全交给 super）
+ * - FastInflater 的池只在"创建侧"发挥作用：当 RecyclerView 池为空、
+ *   需要新建 ViewHolder 时，优先从 FastInflater 预热池取 View
  *
  * 使用方式：
  * ```
- * recyclerView.setRecycledViewPool(FastRecycledViewPool(context))
- * ```
+ * // 设置 pool
+ * FastRecycledViewPool.install(recyclerView, warmUpLayouts = listOf(
+ *     ViewPool.WarmUpEntry(R.layout.item_feed, 4)
+ * ))
  *
- * 配合 Adapter 使用时，需要在 onCreateViewHolder 中通过 [createViewHolder] 创建 ViewHolder，
- * 以便自动标记 layoutId 用于回收：
- * ```
+ * // Adapter 中，让 viewType == layoutId
+ * override fun getItemViewType(position: Int) = R.layout.item_feed
+ *
  * override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MyViewHolder {
+ *     // 优先从 FastInflater 池取，未命中时正常 inflate
  *     val view = FastInflater.get().inflate(parent, viewType)
- *     view.setTag(R.id.fast_inflater_layout_id, viewType)
  *     return MyViewHolder(view)
  * }
  * ```
  *
- * 或者使用更简洁的方式——让 viewType 直接等于 layoutId：
- * ```
- * override fun getItemViewType(position: Int) = R.layout.item_feed
- * ```
+ * 注意：此类不会把 View 同时放入两个池，避免复用冲突。
  */
 class FastRecycledViewPool(
     private val context: Context
 ) : RecyclerView.RecycledViewPool() {
 
-    /**
-     * ViewHolder 被回收时，将 View 放回 FastInflater 的池。
-     */
-    override fun putRecycledView(scrap: RecyclerView.ViewHolder) {
-        val layoutId = extractLayoutId(scrap)
-        if (layoutId != null) {
-            FastInflater.get().recycle(layoutId, scrap.itemView)
-        }
-        super.putRecycledView(scrap)
-    }
-
-    private fun extractLayoutId(holder: RecyclerView.ViewHolder): Int? {
-        // 优先从 tag 中获取（用户显式标记）
-        val tagged = holder.itemView.getTag(R.id.fast_inflater_layout_id)
-        if (tagged is Int) return tagged
-
-        // fallback: 如果 viewType 是合法的 layout resource id，直接使用
-        val viewType = holder.itemViewType
-        return if (viewType > 0) viewType else null
-    }
+    // 回收完全交给 RecyclerView 自己的池，不做任何额外操作
+    // FastInflater 的池只用于预热和首次创建加速
 
     companion object {
         /**
          * 便捷方法：为 RecyclerView 设置 FastRecycledViewPool 并预热指定布局。
+         *
+         * 预热的 View 会进入 FastInflater 的池，当 Adapter.onCreateViewHolder
+         * 调用 FastInflater.get().inflate() 时会优先命中这些预热的 View。
          */
         fun install(
             recyclerView: RecyclerView,
