@@ -8,6 +8,26 @@
 
 ## 引入
 
+### 方式 1: JitPack（推荐，无需认证）
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        maven { url = uri("https://jitpack.io") }
+    }
+}
+
+// build.gradle.kts
+dependencies {
+    implementation("com.github.donglua:FastInflater:0.1.0")
+}
+```
+
+### 方式 2: GitHub Packages（备选）
+
+需要配置 GitHub Token（[创建 Token](https://github.com/settings/tokens/new?scopes=read:packages)，勾选 `read:packages`）：
+
 ```kotlin
 // settings.gradle.kts
 dependencyResolutionManagement {
