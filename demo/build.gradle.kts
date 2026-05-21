@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("com.github.donglua.fastinflater")
 }
 
 android {
@@ -20,10 +19,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
-}
-
-fastInflater {
-    packageName.set("com.github.donglua.fastinflater.demo.generated")
 }
 
 dependencies {
