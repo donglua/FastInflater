@@ -1,17 +1,12 @@
 plugins {
     `java-gradle-plugin`
-    id("org.jetbrains.kotlin.jvm") version "1.9.22"
-}
-
-repositories {
-    google()
-    mavenCentral()
+    id("org.jetbrains.kotlin.jvm")
 }
 
 dependencies {
     implementation(gradleApi())
-    implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.22")
-    implementation("com.android.tools.build:gradle:8.2.0")
+    implementation("org.jetbrains.kotlin:kotlin-stdlib:2.2.21")
+    implementation("com.android.tools.build:gradle:9.2.1")
     implementation("com.squareup:kotlinpoet:1.16.0")
 }
 

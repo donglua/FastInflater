@@ -96,12 +96,12 @@ class ViewPool {
     }
 
     private data class PoolKey(
-        @LayoutRes val layoutId: Int,
+        @param:LayoutRes val layoutId: Int,
         val factoryFingerprint: String
     )
 
     data class WarmUpEntry(
-        @LayoutRes val layoutId: Int,
+        @param:LayoutRes val layoutId: Int,
         val count: Int = 2
     )
 }

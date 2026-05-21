@@ -1,7 +1,7 @@
 package com.aspect.fastinflater.compiler
 
-import com.android.build.gradle.AppExtension
-import com.android.build.gradle.LibraryExtension
+import com.android.build.api.dsl.ApplicationExtension
+import com.android.build.api.dsl.LibraryExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import java.io.File
@@ -12,7 +12,7 @@ class FastInflaterPlugin : Plugin<Project> {
         val ext = project.extensions.create("fastInflater", FastInflaterExtension::class.java)
 
         project.afterEvaluate {
-            val outputDir = File(project.buildDir, "generated/source/fastinflater")
+            val outputDir = project.layout.buildDirectory.dir("generated/source/fastinflater")
 
             val task = project.tasks.register(
                 "generateFastInflaterLayouts",
@@ -23,7 +23,7 @@ class FastInflaterPlugin : Plugin<Project> {
                 it.layoutDirs.set(collectLayoutDirs(project))
             }
 
-            registerSourceSet(project, outputDir)
+            registerSourceSet(project, outputDir.get().asFile)
 
             project.tasks.matching { it.name.startsWith("preBuild") || it.name.startsWith("generateDebugSources") || it.name.startsWith("generateReleaseSources") }
                 .configureEach { it.dependsOn(task) }
@@ -31,7 +31,7 @@ class FastInflaterPlugin : Plugin<Project> {
     }
 
     private fun defaultPackage(project: Project): String {
-        val app = project.extensions.findByType(AppExtension::class.java)
+        val app = project.extensions.findByType(ApplicationExtension::class.java)
         if (app != null) return "${app.namespace ?: "com.aspect.fastinflater"}.generated"
         val lib = project.extensions.findByType(LibraryExtension::class.java)
         if (lib != null) return "${lib.namespace ?: "com.aspect.fastinflater"}.generated"
@@ -40,21 +40,21 @@ class FastInflaterPlugin : Plugin<Project> {
 
     private fun collectLayoutDirs(project: Project): List<File> {
         val dirs = mutableListOf<File>()
-        val app = project.extensions.findByType(AppExtension::class.java)
+        val app = project.extensions.findByType(ApplicationExtension::class.java)
         app?.sourceSets?.forEach { ss ->
-            ss.res.srcDirs.forEach { res -> dirs.add(File(res, "layout")) }
+            ss.res.directories.forEach { res -> dirs.add(project.file(res).resolve("layout")) }
         }
         val lib = project.extensions.findByType(LibraryExtension::class.java)
         lib?.sourceSets?.forEach { ss ->
-            ss.res.srcDirs.forEach { res -> dirs.add(File(res, "layout")) }
+            ss.res.directories.forEach { res -> dirs.add(project.file(res).resolve("layout")) }
         }
         return dirs.filter { it.isDirectory }
     }
 
     private fun registerSourceSet(project: Project, outputDir: File) {
-        val app = project.extensions.findByType(AppExtension::class.java)
-        app?.sourceSets?.getByName("main")?.java?.srcDir(outputDir)
+        val app = project.extensions.findByType(ApplicationExtension::class.java)
+        app?.sourceSets?.getByName("main")?.kotlin?.directories?.plusAssign(outputDir.path)
         val lib = project.extensions.findByType(LibraryExtension::class.java)
-        lib?.sourceSets?.getByName("main")?.java?.srcDir(outputDir)
+        lib?.sourceSets?.getByName("main")?.kotlin?.directories?.plusAssign(outputDir.path)
     }
 }

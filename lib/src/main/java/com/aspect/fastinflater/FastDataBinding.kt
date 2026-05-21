@@ -15,8 +15,7 @@ object FastDataBinding {
         parent: ViewGroup? = null,
         attachToRoot: Boolean = false
     ): T {
-        val fast = FastInflater.get()
-        val pooled = fast.obtainFromPool(layoutId, context, parent)
+        val pooled = obtainPooled(layoutId, context, parent)
         if (pooled != null) {
             InflateTracker.recordInflate(layoutId, 0)
             val binding = DataBindingUtil.bind<T>(pooled)
@@ -59,4 +58,11 @@ object FastDataBinding {
             DataBindingUtil.inflate(inflater, layoutId, parent, attachToRoot)
         }
     }
+
+    @PublishedApi
+    internal fun obtainPooled(
+        @LayoutRes layoutId: Int,
+        context: Context,
+        parent: ViewGroup?
+    ) = FastInflater.get().obtainFromPool(layoutId, context, parent)
 }
