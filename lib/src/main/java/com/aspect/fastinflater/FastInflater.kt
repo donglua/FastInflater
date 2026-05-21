@@ -49,12 +49,15 @@ class FastInflater private constructor(context: Context) {
     ): View {
         val pooled = viewPool.obtain(layoutId, context, parent)
         if (pooled != null) {
+            PoolStats.recordHit(layoutId)
             InflateTracker.recordInflate(layoutId, 0)
             if (attachToRoot && parent != null) {
                 parent.addView(pooled)
             }
             return pooled
         }
+
+        PoolStats.recordMiss(layoutId)
 
         val creator = registry.resolve(context, layoutId)
         if (creator != null) {
@@ -82,10 +85,13 @@ class FastInflater private constructor(context: Context) {
     ) {
         val pooled = viewPool.obtain(layoutId, context, parent)
         if (pooled != null) {
+            PoolStats.recordHit(layoutId)
             InflateTracker.recordInflate(layoutId, 0)
             callback(pooled)
             return
         }
+
+        PoolStats.recordMiss(layoutId)
 
         val creator = registry.resolve(context, layoutId)
         asyncExecutor.execute {
@@ -121,6 +127,18 @@ class FastInflater private constructor(context: Context) {
 
     fun setMaxPoolSize(size: Int) {
         viewPool.setMaxPoolSize(size)
+    }
+
+    fun setMaxPoolSize(@LayoutRes layoutId: Int, size: Int) {
+        viewPool.setMaxPoolSize(layoutId, size)
+    }
+
+    /**
+     * 根据 InflateTracker 统计数据自动调整各布局池大小。
+     * 建议在应用运行一段时间后（如用户使用 5 分钟后）调用一次。
+     */
+    fun autoTune(topN: Int = 20, minSize: Int = 2, maxSize: Int = 12) {
+        viewPool.autoTune(topN, minSize, maxSize)
     }
 
     companion object {
