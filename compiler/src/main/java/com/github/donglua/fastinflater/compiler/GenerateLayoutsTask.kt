@@ -1,4 +1,4 @@
-package com.aspect.fastinflater.compiler
+package com.github.donglua.fastinflater.compiler
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty

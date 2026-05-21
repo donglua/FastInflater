@@ -1,4 +1,4 @@
-package com.aspect.fastinflater.demo
+package com.github.donglua.fastinflater.demo
 
 import android.os.Bundle
 import android.os.SystemClock
@@ -7,9 +7,9 @@ import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.aspect.fastinflater.FastInflater
-import com.aspect.fastinflater.InflateTracker
-import com.aspect.fastinflater.ViewPool
+import com.github.donglua.fastinflater.FastInflater
+import com.github.donglua.fastinflater.InflateTracker
+import com.github.donglua.fastinflater.ViewPool
 
 class MainActivity : AppCompatActivity() {
 

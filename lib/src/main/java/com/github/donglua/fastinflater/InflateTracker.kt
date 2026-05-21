@@ -1,4 +1,4 @@
-package com.aspect.fastinflater
+package com.github.donglua.fastinflater
 
 import androidx.annotation.LayoutRes
 import java.util.concurrent.ConcurrentHashMap

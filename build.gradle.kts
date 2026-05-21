@@ -5,6 +5,6 @@ plugins {
 }
 
 ext {
-    set("libVersion", "0.1.0")
+    set("libVersion", "0.2.0")
     set("libGroup", "com.github.donglua")
 }

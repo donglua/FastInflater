@@ -1,9 +1,9 @@
-package com.aspect.fastinflater.demo
+package com.github.donglua.fastinflater.demo
 
 import android.app.Application
 import android.util.Log
-import com.aspect.fastinflater.FastInflater
-import com.aspect.fastinflater.InflateTracker
+import com.github.donglua.fastinflater.FastInflater
+import com.github.donglua.fastinflater.InflateTracker
 
 class DemoApp : Application() {
 

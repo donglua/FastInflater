@@ -13,8 +13,8 @@ dependencies {
 gradlePlugin {
     plugins {
         create("fastInflaterPlugin") {
-            id = "com.aspect.fastinflater"
-            implementationClass = "com.aspect.fastinflater.compiler.FastInflaterPlugin"
+            id = "com.github.donglua.fastinflater"
+            implementationClass = "com.github.donglua.fastinflater.compiler.FastInflaterPlugin"
         }
     }
 }

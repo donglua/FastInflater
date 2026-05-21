@@ -10,7 +10,7 @@ group = libGroup
 version = libVersion
 
 android {
-    namespace = "com.aspect.fastinflater"
+    namespace = "com.github.donglua.fastinflater"
     compileSdk = 34
 
     defaultConfig {

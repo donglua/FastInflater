@@ -1,4 +1,4 @@
-package com.aspect.fastinflater.compiler
+package com.github.donglua.fastinflater.compiler
 
 import org.w3c.dom.Element
 import org.w3c.dom.Node

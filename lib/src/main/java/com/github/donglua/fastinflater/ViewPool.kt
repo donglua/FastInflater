@@ -1,4 +1,4 @@
-package com.aspect.fastinflater
+package com.github.donglua.fastinflater
 
 import android.content.Context
 import android.view.LayoutInflater

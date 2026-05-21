@@ -1,4 +1,4 @@
-package com.aspect.fastinflater
+package com.github.donglua.fastinflater
 
 import android.content.ComponentCallbacks2
 import android.content.Context

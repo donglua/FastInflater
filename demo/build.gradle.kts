@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "com.aspect.fastinflater.demo"
+    namespace = "com.github.donglua.fastinflater.demo"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.aspect.fastinflater.demo"
+        applicationId = "com.github.donglua.fastinflater.demo"
         minSdk = 24
         targetSdk = 34
         versionCode = 1

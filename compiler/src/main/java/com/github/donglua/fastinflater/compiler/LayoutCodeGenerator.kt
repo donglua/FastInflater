@@ -1,4 +1,4 @@
-package com.aspect.fastinflater.compiler
+package com.github.donglua.fastinflater.compiler
 
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -49,7 +49,7 @@ class LayoutCodeGenerator(
     fun generateRegistry(entries: List<GenerateLayoutsTask.RegistryEntry>) {
         val registerAll = FunSpec.builder("registerAll")
             .addModifiers(KModifier.INTERNAL)
-            .addParameter("registry", ClassName("com.aspect.fastinflater", "GeneratedLayoutRegistry"))
+            .addParameter("registry", ClassName("com.github.donglua.fastinflater", "GeneratedLayoutRegistry"))
             .apply {
                 entries.forEach { entry ->
                     addStatement(

@@ -1,4 +1,4 @@
-package com.aspect.fastinflater.compiler
+package com.github.donglua.fastinflater.compiler
 
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.dsl.LibraryExtension
@@ -32,10 +32,10 @@ class FastInflaterPlugin : Plugin<Project> {
 
     private fun defaultPackage(project: Project): String {
         val app = project.extensions.findByType(ApplicationExtension::class.java)
-        if (app != null) return "${app.namespace ?: "com.aspect.fastinflater"}.generated"
+        if (app != null) return "${app.namespace ?: "com.github.donglua.fastinflater"}.generated"
         val lib = project.extensions.findByType(LibraryExtension::class.java)
-        if (lib != null) return "${lib.namespace ?: "com.aspect.fastinflater"}.generated"
-        return "com.aspect.fastinflater.generated"
+        if (lib != null) return "${lib.namespace ?: "com.github.donglua.fastinflater"}.generated"
+        return "com.github.donglua.fastinflater.generated"
     }
 
     private fun collectLayoutDirs(project: Project): List<File> {
