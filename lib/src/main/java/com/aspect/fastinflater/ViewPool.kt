@@ -13,14 +13,23 @@ class ViewPool {
 
     private val pool = ConcurrentHashMap<PoolKey, ConcurrentLinkedDeque<View>>()
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
+    private val perLayoutMaxSize = ConcurrentHashMap<Int, Int>()
     private val executor = Executors.newFixedThreadPool(
         (Runtime.getRuntime().availableProcessors() - 1).coerceAtLeast(2)
     )
 
-    private var maxPoolSize = 4
+    private var defaultMaxPoolSize = 4
 
     fun setMaxPoolSize(size: Int) {
-        maxPoolSize = size
+        defaultMaxPoolSize = size
+    }
+
+    fun setMaxPoolSize(@LayoutRes layoutId: Int, size: Int) {
+        perLayoutMaxSize[layoutId] = size
+    }
+
+    private fun maxSizeFor(@LayoutRes layoutId: Int): Int {
+        return perLayoutMaxSize[layoutId] ?: defaultMaxPoolSize
     }
 
     fun registerPolicy(@LayoutRes layoutId: Int, policy: ViewRecyclePolicy) {
@@ -42,11 +51,11 @@ class ViewPool {
     fun recycle(@LayoutRes layoutId: Int, view: View) {
         val policy = policies[layoutId]
         if (policy != null && !policy.canRecycle(view)) {
-            return // 丢弃不可回收的 View
+            return
         }
         val key = PoolKey(layoutId, fingerprint(view.context))
         val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
-        if (deque.size < maxPoolSize) {
+        if (deque.size < maxSizeFor(layoutId)) {
             policy?.onRecycle(view) ?: ViewCleaner.clean(view)
             deque.offer(view)
         }
@@ -60,12 +69,37 @@ class ViewPool {
                 try {
                     val view = inflater.inflate(layoutId, null, false)
                     val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
-                    if (deque.size < maxPoolSize) {
+                    if (deque.size < maxSizeFor(layoutId)) {
                         deque.offer(view)
                     }
                 } catch (_: Exception) {
                 }
             }
+        }
+    }
+
+    /**
+     * 根据 InflateTracker 的统计数据自动调整各布局的池大小。
+     * 高频布局分配更大的池，低频布局保持默认。
+     *
+     * @param topN 取 inflate 次数最多的前 N 个布局进行调整
+     * @param minSize 最小池大小
+     * @param maxSize 最大池大小
+     */
+    fun autoTune(topN: Int = 20, minSize: Int = 2, maxSize: Int = 12) {
+        val top = InflateTracker.topN(topN)
+        if (top.isEmpty()) return
+
+        val maxCount = top.first().second.count.get()
+        if (maxCount <= 0) return
+
+        top.forEach { (layoutId, stat) ->
+            val count = stat.count.get()
+            // 按使用频率线性映射到 [minSize, maxSize]
+            val suggested = (count.toFloat() / maxCount * (maxSize - minSize) + minSize)
+                .toInt()
+                .coerceIn(minSize, maxSize)
+            perLayoutMaxSize[layoutId] = suggested
         }
     }
 
