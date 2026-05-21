@@ -3,6 +3,8 @@ package com.github.donglua.fastinflater
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -94,16 +96,43 @@ class FastInflater private constructor(context: Context) {
         PoolStats.recordMiss(layoutId)
 
         val creator = registry.resolve(context, layoutId)
+
+        // 已知必须主线程：直接在主线程 inflate，避免后台崩溃
+        if (viewPool.isMainThreadOnly(layoutId)) {
+            val handler = Handler(Looper.getMainLooper())
+            val run = Runnable {
+                val view = InflateTracker.track(layoutId) {
+                    if (creator != null) creator.create(context, parent, false)
+                    else LayoutInflater.from(context).inflate(layoutId, parent, false)
+                }
+                callback(view)
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) run.run() else handler.post(run)
+            return
+        }
+
         asyncExecutor.execute {
-            val view = InflateTracker.track(layoutId) {
-                if (creator != null) {
-                    creator.create(context, parent, false)
-                } else {
-                    LayoutInflater.from(context).cloneInContext(context)
-                        .inflate(layoutId, parent, false)
+            try {
+                val view = InflateTracker.track(layoutId) {
+                    if (creator != null) {
+                        creator.create(context, parent, false)
+                    } else {
+                        LayoutInflater.from(context).cloneInContext(context)
+                            .inflate(layoutId, parent, false)
+                    }
+                }
+                parent?.post { callback(view) } ?: callback(view)
+            } catch (e: Throwable) {
+                // 后台 inflate 失败，标记并降级到主线程重试
+                viewPool.markAsMainThreadOnly(layoutId)
+                Handler(Looper.getMainLooper()).post {
+                    val view = InflateTracker.track(layoutId) {
+                        if (creator != null) creator.create(context, parent, false)
+                        else LayoutInflater.from(context).inflate(layoutId, parent, false)
+                    }
+                    callback(view)
                 }
             }
-            parent?.post { callback(view) } ?: callback(view)
         }
     }
 
@@ -139,6 +168,32 @@ class FastInflater private constructor(context: Context) {
      */
     fun autoTune(topN: Int = 20, minSize: Int = 2, maxSize: Int = 12) {
         viewPool.autoTune(topN, minSize, maxSize)
+    }
+
+    /**
+     * 显式标记某个布局只能在主线程 inflate。
+     *
+     * 适用于已知包含以下组件的布局：
+     * - androidx.compose.ui.platform.ComposeView (内部依赖 LiveData)
+     * - WebView / SurfaceView / TextureView
+     * - 自定义 View 在构造或 attach 时访问 LiveData / Lifecycle
+     *
+     * 标记后，warmUp/inflateAsync 都会走主线程，避免后台 inflate 崩溃。
+     * 即使不显式标记，FastInflater 在后台 inflate 失败时也会自动检测并标记。
+     */
+    fun markAsMainThreadOnly(@LayoutRes layoutId: Int) {
+        viewPool.markAsMainThreadOnly(layoutId)
+    }
+
+    fun isMainThreadOnly(@LayoutRes layoutId: Int): Boolean {
+        return viewPool.isMainThreadOnly(layoutId)
+    }
+
+    /**
+     * 监听 warmUp 失败/降级事件。用于诊断哪些布局触发了主线程降级。
+     */
+    fun setWarmUpListener(listener: ViewPool.WarmUpListener?) {
+        viewPool.setWarmUpListener(listener)
     }
 
     companion object {

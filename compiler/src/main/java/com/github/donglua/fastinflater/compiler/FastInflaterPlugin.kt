@@ -53,8 +53,8 @@ class FastInflaterPlugin : Plugin<Project> {
 
     private fun registerSourceSet(project: Project, outputDir: File) {
         val app = project.extensions.findByType(ApplicationExtension::class.java)
-        app?.sourceSets?.getByName("main")?.kotlin?.directories?.plusAssign(outputDir.path)
+        app?.sourceSets?.getByName("main")?.java?.srcDir(outputDir)
         val lib = project.extensions.findByType(LibraryExtension::class.java)
-        lib?.sourceSets?.getByName("main")?.kotlin?.directories?.plusAssign(outputDir.path)
+        lib?.sourceSets?.getByName("main")?.java?.srcDir(outputDir)
     }
 }

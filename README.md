@@ -222,3 +222,32 @@ PoolStats.snapshot().forEach { (layoutId, stat) ->
 - 命中率 > 90%：池化充分发挥作用
 - 命中率 100% 且池经常满：可以适当减小池大小，节省内存
 
+### 主线程依赖的布局
+
+部分 View 不能在后台线程 inflate（构造或 attach 流程会访问 LiveData/Lifecycle）：
+
+- `androidx.compose.ui.platform.ComposeView`
+- `WebView` / `SurfaceView` / `TextureView`
+- 自定义 View 在初始化时调用 `liveData.observe()` / `liveData.removeObserver()`
+
+**自动检测**：FastInflater 后台 inflate 失败时会自动捕获异常、标记该布局，剩余预热数量降级到主线程 IdleHandler，后续 `warmUp` 和 `inflateAsync` 也会直接走主线程。
+
+**显式标记**（推荐，避免一次后台失败的开销）：
+
+```kotlin
+FastInflater.get().markAsMainThreadOnly(R.layout.fragment_compose_view)
+```
+
+**监听降级事件**：
+
+```kotlin
+FastInflater.get().setWarmUpListener(object : ViewPool.WarmUpListener {
+    override fun onBackgroundInflateFailed(layoutId: Int, error: Throwable) {
+        Log.w("FastInflater", "fallback to main thread: ${resources.getResourceEntryName(layoutId)}", error)
+    }
+    override fun onMarkedAsMainThreadOnly(layoutId: Int) {
+        Log.i("FastInflater", "marked main-thread-only: ${resources.getResourceEntryName(layoutId)}")
+    }
+})
+```
+

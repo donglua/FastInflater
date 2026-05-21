@@ -1,6 +1,8 @@
 package com.github.donglua.fastinflater
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -11,12 +13,26 @@ import java.util.concurrent.Executors
 
 class ViewPool {
 
+    /** 监听 warmUp 过程的事件（主要用于诊断后台 inflate 失败 → 主线程降级）。 */
+    interface WarmUpListener {
+        /** 后台 inflate 抛异常，已记录该布局并自动 fallback 到主线程。 */
+        fun onBackgroundInflateFailed(@LayoutRes layoutId: Int, error: Throwable) {}
+        /** 布局被标记为只能主线程 inflate（含手动标记和自动检测两种情况）。 */
+        fun onMarkedAsMainThreadOnly(@LayoutRes layoutId: Int) {}
+    }
+
     private val pool = ConcurrentHashMap<PoolKey, ConcurrentLinkedDeque<View>>()
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
     private val perLayoutMaxSize = ConcurrentHashMap<Int, Int>()
+    /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
+    private val mainThreadOnly = ConcurrentHashMap.newKeySet<Int>()
     private val executor = Executors.newFixedThreadPool(
         (Runtime.getRuntime().availableProcessors() - 1).coerceAtLeast(2)
     )
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @Volatile
+    private var warmUpListener: WarmUpListener? = null
 
     private var defaultMaxPoolSize = 4
 
@@ -61,21 +77,94 @@ class ViewPool {
         }
     }
 
+    /**
+     * 设置 warmUp 监听器，可以观察后台 inflate 失败/降级事件。
+     */
+    fun setWarmUpListener(listener: WarmUpListener?) {
+        warmUpListener = listener
+    }
+
+    /**
+     * 显式标记某个布局只能在主线程 inflate。
+     *
+     * 适用于已知包含以下组件的布局：
+     * - androidx.compose.ui.platform.ComposeView (内部依赖 LiveData)
+     * - WebView / SurfaceView / TextureView
+     * - 自定义 View 中在构造或 attach 流程访问 LiveData / Lifecycle
+     *
+     * 标记后，warmUp 会直接走主线程 IdleHandler，不会尝试后台 inflate。
+     */
+    fun markAsMainThreadOnly(@LayoutRes layoutId: Int) {
+        if (mainThreadOnly.add(layoutId)) {
+            warmUpListener?.onMarkedAsMainThreadOnly(layoutId)
+        }
+    }
+
+    fun isMainThreadOnly(@LayoutRes layoutId: Int): Boolean = layoutId in mainThreadOnly
+
     fun warmUp(context: Context, @LayoutRes layoutId: Int, count: Int = 1) {
+        // 已知必须主线程：直接走主线程 IdleHandler
+        if (layoutId in mainThreadOnly) {
+            warmUpOnMainIdle(context, layoutId, count)
+            return
+        }
         executor.execute {
             val inflater = LayoutInflater.from(context).cloneInContext(context)
             val key = PoolKey(layoutId, fingerprint(context))
-            repeat(count) {
+            repeat(count) { i ->
                 try {
                     val view = inflater.inflate(layoutId, null, false)
                     val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
                     if (deque.size < maxSizeFor(layoutId)) {
                         deque.offer(view)
                     }
-                } catch (_: Exception) {
+                } catch (e: Throwable) {
+                    // 后台 inflate 失败，多半是组件依赖主线程（ComposeView/LiveData/WebView 等）
+                    // 标记后续 warmUp 走主线程，并把剩余预热数量降级到主线程
+                    val newlyMarked = mainThreadOnly.add(layoutId)
+                    warmUpListener?.onBackgroundInflateFailed(layoutId, e)
+                    if (newlyMarked) {
+                        warmUpListener?.onMarkedAsMainThreadOnly(layoutId)
+                    }
+                    val remaining = count - i
+                    if (remaining > 0) {
+                        warmUpOnMainIdle(context, layoutId, remaining)
+                    }
+                    return@execute
                 }
             }
         }
+    }
+
+    /**
+     * 在主线程 IdleHandler 中分批预热，避免抢占用户交互帧。
+     * 每次 idle 只 inflate 1 个，避免长时间占用主线程。
+     */
+    private fun warmUpOnMainIdle(context: Context, @LayoutRes layoutId: Int, count: Int) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { warmUpOnMainIdle(context, layoutId, count) }
+            return
+        }
+        val key = PoolKey(layoutId, fingerprint(context))
+        Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
+            private var remaining = count
+
+            override fun queueIdle(): Boolean {
+                if (remaining <= 0) return false
+                try {
+                    val view = LayoutInflater.from(context).inflate(layoutId, null, false)
+                    val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
+                    if (deque.size < maxSizeFor(layoutId)) {
+                        deque.offer(view)
+                    }
+                } catch (_: Throwable) {
+                    // 主线程也失败，说明布局本身有问题，放弃
+                    return false
+                }
+                remaining--
+                return remaining > 0
+            }
+        })
     }
 
     /**
