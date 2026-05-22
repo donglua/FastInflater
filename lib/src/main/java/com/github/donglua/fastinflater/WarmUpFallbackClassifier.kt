@@ -16,10 +16,6 @@ internal object WarmUpFallbackClassifier {
             className.substringAfterLast('.') in knownMainThreadOnlySimpleNames
     }
 
-    fun isLikelyCustomViewClass(className: String): Boolean {
-        return '.' in className && !className.startsWith("android.")
-    }
-
     fun isMainThreadDependencyFailure(error: Throwable): Boolean {
         return error.causeSequence().any { cause ->
             val message = cause.message ?: return@any false

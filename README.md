@@ -41,7 +41,7 @@ dependencies {
 - **自定义回收策略** — `ViewRecyclePolicy` 接口，精确控制 View 状态清理
 - **自定义 View 自清理** — 自定义 View 可实现 `PoolableView`，回收时清理内部脏状态
 - **生命周期敏感布局保护** — 可按 layout 关闭池化，避免 EventBus/Lifecycle 监听脱离宿主
-- **内存压力响应** — 监听 trimMemory 分级清理；Configuration 变化自动清池
+- **生命周期与内存压力响应** — Activity 销毁、Configuration 变化、trimMemory 时自动清池
 
 ## Quick Start
 
@@ -157,6 +157,8 @@ FastInflater.get().registerPolicy(R.layout.item_feed, object : ViewRecyclePolicy
 
 如果 XML 中存在自定义 View，在构造函数、`onAttachedToWindow()` 或业务 bind 阶段注册了 EventBus、宿主 `LifecycleObserver`、Activity callback、广播监听等外部资源，进入池后这些注册关系可能继续存活，导致后台持续收事件、引用旧 Activity，甚至在旧宿主销毁后崩溃。
 
+FastInflater 会在 Activity 销毁时清空全局 View 池，避免池中 View 跨宿主生命周期长期持有旧 Activity context。这个保护不能替代业务解绑：同一个 Activity 生命周期内的复用仍需要布局自身清理干净。
+
 处理规则：
 
 - 能可靠解绑：注册 `ViewRecyclePolicy`，在 `onRecycle()` 中注销 EventBus/Lifecycle/callback，并在 `onObtain()` 中恢复可复用初始状态。
@@ -238,7 +240,7 @@ PoolStats.enabled = false
 
 ### 主线程依赖的布局
 
-部分 View 不能后台 inflate（ComposeView、WebView、含 LiveData 的自定义 View）。FastInflater 会自动检测并降级到主线程 IdleHandler，也可以预先标记：
+部分 View 不能后台 inflate（ComposeView、WebView、含 LiveData/Handler/GestureDetector 的自定义 View）。FastInflater 会优先识别已知主线程组件，并直接降级到主线程 IdleHandler；未知自定义 View 仍会先尝试后台 inflate，如果触发主线程依赖异常，会记录该布局和 View 类，后续 warmUp 不再反复后台试错。也可以预先标记：
 
 ```kotlin
 FastInflater.get().markAsMainThreadOnly(R.layout.fragment_compose_view)

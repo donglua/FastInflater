@@ -1,14 +1,18 @@
 package com.github.donglua.fastinflater
 
+import android.app.Activity
+import android.app.Application
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.LayoutRes
+import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 
 class FastInflater private constructor(context: Context) {
@@ -39,6 +43,19 @@ class FastInflater private constructor(context: Context) {
                 }
             }
         })
+        (appContext as? Application)?.registerActivityLifecycleCallbacks(
+            object : Application.ActivityLifecycleCallbacks {
+                override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+                override fun onActivityStarted(activity: Activity) = Unit
+                override fun onActivityResumed(activity: Activity) = Unit
+                override fun onActivityPaused(activity: Activity) = Unit
+                override fun onActivityStopped(activity: Activity) = Unit
+                override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+                override fun onActivityDestroyed(activity: Activity) {
+                    viewPool.clear()
+                }
+            }
+        )
     }
 
     fun inflate(
@@ -85,12 +102,16 @@ class FastInflater private constructor(context: Context) {
         }
 
         PoolStats.recordMiss(layoutId)
+        val contextRef = WeakReference(context)
+        val parentRef = parent?.let(::WeakReference)
 
         // 已知必须主线程：直接在主线程 inflate，避免后台崩溃
         if (viewPool.isMainThreadOnly(layoutId)) {
             val run = Runnable {
+                val inflateContext = contextRef.get() ?: return@Runnable
+                val inflateParent = parentRef?.get()
                 val view = InflateTracker.track(layoutId) {
-                    LayoutInflater.from(context).inflate(layoutId, parent, false)
+                    LayoutInflater.from(inflateContext).inflate(layoutId, inflateParent, false)
                 }
                 callback(view)
             }
@@ -99,18 +120,22 @@ class FastInflater private constructor(context: Context) {
         }
 
         asyncExecutor.execute {
+            val inflateContext = contextRef.get() ?: return@execute
             try {
+                val inflateParent = parentRef?.get()
                 val view = InflateTracker.track(layoutId) {
-                    LayoutInflater.from(context).cloneInContext(context)
-                        .inflate(layoutId, parent, false)
+                    LayoutInflater.from(inflateContext).cloneInContext(inflateContext)
+                        .inflate(layoutId, inflateParent, false)
                 }
-                parent?.post { callback(view) } ?: callback(view)
+                inflateParent?.post { callback(view) } ?: callback(view)
             } catch (e: Throwable) {
                 // 后台 inflate 失败，标记并降级到主线程重试
                 viewPool.markAsMainThreadOnly(layoutId)
                 mainHandler.post {
+                    val mainContext = contextRef.get() ?: return@post
+                    val mainParent = parentRef?.get()
                     val view = InflateTracker.track(layoutId) {
-                        LayoutInflater.from(context).inflate(layoutId, parent, false)
+                        LayoutInflater.from(mainContext).inflate(layoutId, mainParent, false)
                     }
                     callback(view)
                 }

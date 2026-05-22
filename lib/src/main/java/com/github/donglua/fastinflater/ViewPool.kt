@@ -7,6 +7,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.LayoutRes
+import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
@@ -35,6 +36,8 @@ class ViewPool {
     private val poolGeneration = AtomicInteger(0)
     /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
     private val mainThreadOnly = ConcurrentHashMap.newKeySet<Int>()
+    /** 已知必须在主线程创建的 View 类，避免相同自定义 View 在其他布局中反复后台试错。 */
+    private val mainThreadOnlyViewClasses = ConcurrentHashMap.newKeySet<String>()
     /** 已知不应复用的布局，例如包含宿主 Lifecycle/EventBus 绑定的自定义 View。 */
     private val poolingDisabled = ConcurrentHashMap.newKeySet<Int>()
     private val executor = Executors.newFixedThreadPool(
@@ -171,8 +174,21 @@ class ViewPool {
             warmUpOnMainIdle(context, layoutId, key, warmCount, generation)
             return
         }
+        val contextRef = WeakReference(context)
         executor.execute {
-            val inflater = LayoutInflater.from(context).cloneInContext(context)
+            val warmContext = contextRef.get()
+            if (warmContext == null) {
+                finishWarmUp(key, warmCount)
+                return@execute
+            }
+            if (layoutId in mainThreadOnly || containsMainThreadOnlyTag(warmContext, layoutId)) {
+                if (mainThreadOnly.add(layoutId)) {
+                    warmUpListener?.onMarkedAsMainThreadOnly(layoutId)
+                }
+                warmUpOnMainIdle(contextRef, layoutId, key, warmCount, generation)
+                return@execute
+            }
+            val inflater = LayoutInflater.from(warmContext).cloneInContext(warmContext)
             repeat(warmCount) { i ->
                 if (isStaleGeneration(generation)) {
                     finishWarmUp(key, warmCount - i)
@@ -190,6 +206,10 @@ class ViewPool {
                 } catch (e: Throwable) {
                     // 后台 inflate 失败，多半是组件依赖主线程（ComposeView/LiveData/WebView 等）
                     // 标记后续 warmUp 走主线程，并把剩余预热数量降级到主线程
+                    if (WarmUpFallbackClassifier.isMainThreadDependencyFailure(e)) {
+                        WarmUpFallbackClassifier.extractInflatingClassName(e)
+                            ?.let(mainThreadOnlyViewClasses::add)
+                    }
                     val newlyMarked = mainThreadOnly.add(layoutId)
                     warmUpListener?.onBackgroundInflateFailed(layoutId, e)
                     if (newlyMarked) {
@@ -197,7 +217,7 @@ class ViewPool {
                     }
                     val remaining = warmCount - i
                     if (remaining > 0) {
-                        warmUpOnMainIdle(context, layoutId, key, remaining, generation)
+                        warmUpOnMainIdle(contextRef, layoutId, key, remaining, generation)
                         transferredToMain = true
                     }
                     return@execute
@@ -221,8 +241,18 @@ class ViewPool {
         count: Int,
         generation: Int
     ) {
+        warmUpOnMainIdle(WeakReference(context), layoutId, key, count, generation)
+    }
+
+    private fun warmUpOnMainIdle(
+        contextRef: WeakReference<Context>,
+        @LayoutRes layoutId: Int,
+        key: Long,
+        count: Int,
+        generation: Int
+    ) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { warmUpOnMainIdle(context, layoutId, key, count, generation) }
+            mainHandler.post { warmUpOnMainIdle(contextRef, layoutId, key, count, generation) }
             return
         }
         Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
@@ -234,8 +264,13 @@ class ViewPool {
                     finishWarmUp(key, remaining)
                     return false
                 }
+                val warmContext = contextRef.get()
+                if (warmContext == null) {
+                    finishWarmUp(key, remaining)
+                    return false
+                }
                 try {
-                    val view = LayoutInflater.from(context).inflate(layoutId, null, false)
+                    val view = LayoutInflater.from(warmContext).inflate(layoutId, null, false)
                     val deque = dequeFor(key)
                     if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId) &&
                         canEnterPool(layoutId, view)
@@ -280,13 +315,15 @@ class ViewPool {
     }
 
     fun warmUpOnIdle(context: Context, layouts: List<WarmUpEntry>) {
+        val contextRef = WeakReference(context)
         Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
             private var index = 0
 
             override fun queueIdle(): Boolean {
                 if (index >= layouts.size) return false
+                val warmContext = contextRef.get() ?: return false
                 val entry = layouts[index++]
-                warmUp(context, entry.layoutId, entry.count)
+                warmUp(warmContext, entry.layoutId, entry.count)
                 return index < layouts.size
             }
         })
@@ -324,6 +361,38 @@ class ViewPool {
         pool.keys.removeIf { key ->
             (key ushr 32).toInt() == layoutId
         }
+    }
+
+    private fun containsMainThreadOnlyTag(context: Context, @LayoutRes layoutId: Int): Boolean {
+        return runCatching {
+            val parser = context.resources.getLayout(layoutId)
+            try {
+                var eventType = parser.eventType
+                while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                    if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG) {
+                        val tagName = parser.name
+                        val className = if (tagName == "view") {
+                            parser.getAttributeValue(null, "class")
+                        } else {
+                            tagName
+                        }
+                        if (className != null && isMainThreadOnlyTag(className)) {
+                            return true
+                        }
+                    }
+                    eventType = parser.next()
+                }
+                false
+            } finally {
+                parser.close()
+            }
+        }.getOrDefault(false)
+    }
+
+    private fun isMainThreadOnlyTag(tagName: String): Boolean {
+        if (WarmUpFallbackClassifier.isKnownMainThreadOnlyViewClass(tagName)) return true
+        if (tagName !in mainThreadOnlyViewClasses) return false
+        return true
     }
 
     private fun isPoolingDisabled(@LayoutRes layoutId: Int): Boolean {
