@@ -32,6 +32,7 @@ class ViewPool {
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
     private val perLayoutMaxSize = ConcurrentHashMap<Int, Int>()
     private val warmingCounts = ConcurrentHashMap<Long, AtomicInteger>()
+    private val poolGeneration = AtomicInteger(0)
     /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
     private val mainThreadOnly = ConcurrentHashMap.newKeySet<Int>()
     private val executor = Executors.newFixedThreadPool(
@@ -75,8 +76,7 @@ class ViewPool {
     fun setFactoryIsolation(enabled: Boolean) {
         if (factoryIsolation == enabled) return
         factoryIsolation = enabled
-        pool.clear()
-        warmingCounts.clear()
+        clear()
     }
 
     fun isFactoryIsolationEnabled(): Boolean = factoryIsolation
@@ -142,20 +142,25 @@ class ViewPool {
         val key = keyFor(layoutId, context)
         val warmCount = reserveWarmUp(key, layoutId, count)
         if (warmCount <= 0) return
+        val generation = poolGeneration.get()
 
         // 已知必须主线程：直接走主线程 IdleHandler
         if (layoutId in mainThreadOnly) {
-            warmUpOnMainIdle(context, layoutId, key, warmCount)
+            warmUpOnMainIdle(context, layoutId, key, warmCount, generation)
             return
         }
         executor.execute {
             val inflater = LayoutInflater.from(context).cloneInContext(context)
             repeat(warmCount) { i ->
+                if (isStaleGeneration(generation)) {
+                    finishWarmUp(key, warmCount - i)
+                    return@execute
+                }
                 var transferredToMain = false
                 try {
                     val view = inflater.inflate(layoutId, null, false)
                     val deque = dequeFor(key)
-                    if (canAcceptWarmView(key, layoutId)) {
+                    if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId)) {
                         deque.offer(view)
                     }
                 } catch (e: Throwable) {
@@ -168,7 +173,7 @@ class ViewPool {
                     }
                     val remaining = warmCount - i
                     if (remaining > 0) {
-                        warmUpOnMainIdle(context, layoutId, key, remaining)
+                        warmUpOnMainIdle(context, layoutId, key, remaining, generation)
                         transferredToMain = true
                     }
                     return@execute
@@ -185,9 +190,15 @@ class ViewPool {
      * 在主线程 IdleHandler 中分批预热，避免抢占用户交互帧。
      * 每次 idle 只 inflate 1 个，避免长时间占用主线程。
      */
-    private fun warmUpOnMainIdle(context: Context, @LayoutRes layoutId: Int, key: Long, count: Int) {
+    private fun warmUpOnMainIdle(
+        context: Context,
+        @LayoutRes layoutId: Int,
+        key: Long,
+        count: Int,
+        generation: Int
+    ) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { warmUpOnMainIdle(context, layoutId, key, count) }
+            mainHandler.post { warmUpOnMainIdle(context, layoutId, key, count, generation) }
             return
         }
         Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
@@ -195,10 +206,14 @@ class ViewPool {
 
             override fun queueIdle(): Boolean {
                 if (remaining <= 0) return false
+                if (isStaleGeneration(generation)) {
+                    finishWarmUp(key, remaining)
+                    return false
+                }
                 try {
                     val view = LayoutInflater.from(context).inflate(layoutId, null, false)
                     val deque = dequeFor(key)
-                    if (canAcceptWarmView(key, layoutId)) {
+                    if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId)) {
                         deque.offer(view)
                     }
                 } catch (_: Throwable) {
@@ -257,11 +272,14 @@ class ViewPool {
     }
 
     fun clear() {
+        poolGeneration.incrementAndGet()
         pool.clear()
         warmingCounts.clear()
     }
 
     fun trimToSize(keep: Int) {
+        poolGeneration.incrementAndGet()
+        warmingCounts.clear()
         pool.forEach { (_, deque) ->
             while (deque.size > keep) {
                 deque.poll()
@@ -324,6 +342,10 @@ class ViewPool {
 
     private fun dequeFor(key: Long): ConcurrentLinkedDeque<View> {
         return pool.getOrPut(key) { ConcurrentLinkedDeque() }
+    }
+
+    private fun isStaleGeneration(generation: Int): Boolean {
+        return poolGeneration.get() != generation
     }
 
     data class WarmUpEntry(
