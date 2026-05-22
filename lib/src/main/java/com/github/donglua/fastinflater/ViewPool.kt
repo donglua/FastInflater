@@ -6,6 +6,12 @@ import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.GridLayout
+import android.widget.LinearLayout
+import android.widget.RelativeLayout
+import android.widget.TableLayout
+import android.widget.TableRow
 import androidx.annotation.LayoutRes
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
@@ -33,6 +39,7 @@ class ViewPool {
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
     private val perLayoutMaxSize = ConcurrentHashMap<Int, Int>()
     private val warmingCounts = ConcurrentHashMap<Long, AtomicInteger>()
+    private val layoutParamsCompatibility = ConcurrentHashMap<LayoutParamsCompatibilityKey, Boolean>()
     private val poolGeneration = AtomicInteger(0)
     /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
     private val mainThreadOnly = ConcurrentHashMap.newKeySet<Int>()
@@ -109,7 +116,8 @@ class ViewPool {
     }
 
     /**
-     * 从池中取一个 View。热路径：仅 poll + 可选的 policy.onObtain() 钩子。
+     * 从池中取一个 View。热路径：poll + 父容器 LayoutParams 兼容性检查 +
+     * 可选的 policy.onObtain() 钩子。
      *
      * 池中的 View 在 [recycle] 时已经被清理过（默认 [ViewCleaner.clean] 或 [ViewRecyclePolicy.onRecycle]），
      * View 处于 detached 状态、不会被外部修改，所以这里不再重复清理整棵 View 树。
@@ -117,9 +125,15 @@ class ViewPool {
     fun obtain(@LayoutRes layoutId: Int, context: Context, parent: ViewGroup? = null): View? {
         if (isPoolingDisabled(layoutId)) return null
         val key = keyFor(layoutId, context)
-        return pool[key]?.poll()?.also { view ->
+        val deque = pool[key] ?: return null
+        while (true) {
+            val view = deque.poll() ?: return null
+            if (!canAttachToParent(parent, view)) {
+                continue
+            }
             // 只跑用户自定义的 onObtain 钩子；默认情况下 obtain 是纯 poll
             policies[layoutId]?.onObtain(view)
+            return view
         }
     }
 
@@ -352,13 +366,16 @@ class ViewPool {
     }
 
     private fun clearLayout(@LayoutRes layoutId: Int) {
-        poolGeneration.incrementAndGet()
-        warmingCounts.clear()
         if (!factoryIsolation) {
-            pool.remove(layoutId.toLong())
+            val key = layoutId.toLong()
+            pool.remove(key)
+            warmingCounts.remove(key)
             return
         }
         pool.keys.removeIf { key ->
+            (key ushr 32).toInt() == layoutId
+        }
+        warmingCounts.keys.removeIf { key ->
             (key ushr 32).toInt() == layoutId
         }
     }
@@ -464,6 +481,50 @@ class ViewPool {
         return policies[layoutId]?.canRecycle(view) ?: true
     }
 
+    private fun canAttachToParent(parent: ViewGroup?, view: View): Boolean {
+        val params = view.layoutParams ?: return true
+        parent ?: return true
+        val key = LayoutParamsCompatibilityKey(parent.javaClass, params.javaClass)
+        return layoutParamsCompatibility.getOrPut(key) {
+            acceptsLayoutParams(parent, params)
+        }
+    }
+
+    private fun acceptsLayoutParams(
+        parent: ViewGroup,
+        params: ViewGroup.LayoutParams
+    ): Boolean {
+        return when (parent) {
+            is TableLayout -> params is TableLayout.LayoutParams
+            is TableRow -> params is TableRow.LayoutParams
+            is LinearLayout -> params is LinearLayout.LayoutParams
+            is FrameLayout -> params is FrameLayout.LayoutParams
+            is RelativeLayout -> params is RelativeLayout.LayoutParams
+            is GridLayout -> params is GridLayout.LayoutParams
+            else -> expectedParamsClass(parent.javaClass)?.isAssignableFrom(params.javaClass) == true
+        }
+    }
+
+    private fun expectedParamsClass(
+        parentClass: Class<out ViewGroup>
+    ): Class<out ViewGroup.LayoutParams>? {
+        var current: Class<*>? = parentClass
+        while (current != null && ViewGroup::class.java.isAssignableFrom(current)) {
+            val paramsClass = runCatching {
+                Class.forName(
+                    "${current.name}\$LayoutParams",
+                    false,
+                    current.classLoader
+                ).asSubclass(ViewGroup.LayoutParams::class.java)
+            }.getOrNull()
+            if (paramsClass != null) {
+                return paramsClass
+            }
+            current = current.superclass
+        }
+        return null
+    }
+
     private fun dequeFor(key: Long): ConcurrentLinkedDeque<View> {
         return pool.getOrPut(key) { ConcurrentLinkedDeque() }
     }
@@ -475,5 +536,10 @@ class ViewPool {
     data class WarmUpEntry(
         @param:LayoutRes val layoutId: Int,
         val count: Int = 2
+    )
+
+    private data class LayoutParamsCompatibilityKey(
+        val parentClass: Class<out ViewGroup>,
+        val layoutParamsClass: Class<out ViewGroup.LayoutParams>
     )
 }
