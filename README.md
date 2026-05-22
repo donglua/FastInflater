@@ -39,6 +39,7 @@ dependencies {
 - **RecyclerView 集成** — 预热加速 ViewHolder 首次创建
 - **DataBinding 支持** — `FastDataBinding` 兼容池化复用
 - **自定义回收策略** — `ViewRecyclePolicy` 接口，精确控制 View 状态清理
+- **生命周期敏感布局保护** — 可按 layout 关闭池化，避免 EventBus/Lifecycle 监听脱离宿主
 - **内存压力响应** — 监听 trimMemory 分级清理；Configuration 变化自动清池
 
 ## Quick Start
@@ -57,6 +58,9 @@ FastInflater.get().warmUp(this, listOf(
 
 // 包含 ComposeView/WebView 的布局，标记为主线程预热
 FastInflater.get().markAsMainThreadOnly(R.layout.fragment_compose)
+
+// 包含宿主 Lifecycle/EventBus 注册且无法可靠解绑的布局，关闭池化
+FastInflater.get().setPoolingEnabled(R.layout.item_lifecycle_sensitive, false)
 ```
 
 ### inflate + 回收
@@ -112,6 +116,36 @@ FastInflater.get().registerPolicy(R.layout.item_feed, object : ViewRecyclePolicy
         view.findViewById<ImageView>(R.id.avatar).setImageDrawable(null)
         view.findViewById<TextView>(R.id.title).text = null
     }
+    override fun canRecycle(view: View): Boolean {
+        return !view.isAttachedToWindow
+    }
+})
+```
+
+### 生命周期敏感布局
+
+`markAsMainThreadOnly()` 只解决后台 inflate 问题，不解决“复用后的生命周期归属”问题。
+
+如果 XML 中存在自定义 View，在构造函数、`onAttachedToWindow()` 或业务 bind 阶段注册了 EventBus、宿主 `LifecycleObserver`、Activity callback、广播监听等外部资源，进入池后这些注册关系可能继续存活，导致后台持续收事件、引用旧 Activity，甚至在旧宿主销毁后崩溃。
+
+处理规则：
+
+- 能可靠解绑：注册 `ViewRecyclePolicy`，在 `onRecycle()` 中注销 EventBus/Lifecycle/callback，并在 `onObtain()` 中恢复可复用初始状态。
+- 不能可靠解绑：关闭该 layout 的池化。
+
+```kotlin
+// 直接禁用池化：不会命中池、不会保存 recycle 的 View、不会 warmUp 预创建
+FastInflater.get().setPoolingEnabled(R.layout.item_lifecycle_sensitive, false)
+
+// 或者提供完整解绑策略
+FastInflater.get().registerPolicy(R.layout.item_lifecycle_sensitive, object : ViewRecyclePolicy {
+    override fun onRecycle(view: View) {
+        val lifecycleView = view.findViewById<MyLifecycleView>(R.id.lifecycle_view)
+        lifecycleView.unbindLifecycle()
+        lifecycleView.unregisterEventBus()
+        ViewCleaner.clean(view)
+    }
+
     override fun canRecycle(view: View): Boolean {
         return !view.isAttachedToWindow
     }

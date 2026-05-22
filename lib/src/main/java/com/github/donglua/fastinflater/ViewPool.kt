@@ -35,6 +35,8 @@ class ViewPool {
     private val poolGeneration = AtomicInteger(0)
     /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
     private val mainThreadOnly = ConcurrentHashMap.newKeySet<Int>()
+    /** 已知不应复用的布局，例如包含宿主 Lifecycle/EventBus 绑定的自定义 View。 */
+    private val poolingDisabled = ConcurrentHashMap.newKeySet<Int>()
     private val executor = Executors.newFixedThreadPool(
         (Runtime.getRuntime().availableProcessors() - 1).coerceAtLeast(2)
     )
@@ -82,12 +84,35 @@ class ViewPool {
     fun isFactoryIsolationEnabled(): Boolean = factoryIsolation
 
     /**
+     * 控制某个布局是否允许进入 FastInflater 池。
+     *
+     * 对于在构造、attach 或 bind 阶段注册全局 EventBus、宿主 Lifecycle observer、
+     * Activity callback 等生命周期敏感组件的布局，应关闭池化。关闭后：
+     * - [obtain] 永远不会返回池中旧 View
+     * - [recycle] 会直接丢弃传入 View
+     * - [warmUp] 不会预创建该布局
+     * - 已经缓存的同 layout View 会被移除
+     */
+    fun setPoolingEnabled(@LayoutRes layoutId: Int, enabled: Boolean) {
+        if (enabled) {
+            poolingDisabled.remove(layoutId)
+        } else if (poolingDisabled.add(layoutId)) {
+            clearLayout(layoutId)
+        }
+    }
+
+    fun isPoolingEnabled(@LayoutRes layoutId: Int): Boolean {
+        return !isPoolingDisabled(layoutId)
+    }
+
+    /**
      * 从池中取一个 View。热路径：仅 poll + 可选的 policy.onObtain() 钩子。
      *
      * 池中的 View 在 [recycle] 时已经被清理过（默认 [ViewCleaner.clean] 或 [ViewRecyclePolicy.onRecycle]），
      * View 处于 detached 状态、不会被外部修改，所以这里不再重复清理整棵 View 树。
      */
     fun obtain(@LayoutRes layoutId: Int, context: Context, parent: ViewGroup? = null): View? {
+        if (isPoolingDisabled(layoutId)) return null
         val key = keyFor(layoutId, context)
         return pool[key]?.poll()?.also { view ->
             // 只跑用户自定义的 onObtain 钩子；默认情况下 obtain 是纯 poll
@@ -101,6 +126,7 @@ class ViewPool {
      * 清理在这里做，使 [obtain] 命中时无需再处理 View 树。
      */
     fun recycle(@LayoutRes layoutId: Int, view: View) {
+        if (isPoolingDisabled(layoutId)) return
         val policy = policies[layoutId]
         if (policy != null && !policy.canRecycle(view)) {
             return
@@ -139,6 +165,7 @@ class ViewPool {
     fun isMainThreadOnly(@LayoutRes layoutId: Int): Boolean = layoutId in mainThreadOnly
 
     fun warmUp(context: Context, @LayoutRes layoutId: Int, count: Int = 1) {
+        if (isPoolingDisabled(layoutId)) return
         val key = keyFor(layoutId, context)
         val warmCount = reserveWarmUp(key, layoutId, count)
         if (warmCount <= 0) return
@@ -267,6 +294,7 @@ class ViewPool {
     }
 
     fun poolSize(@LayoutRes layoutId: Int, context: Context): Int {
+        if (isPoolingDisabled(layoutId)) return 0
         val key = keyFor(layoutId, context)
         return pool[key]?.size ?: 0
     }
@@ -285,6 +313,22 @@ class ViewPool {
                 deque.poll()
             }
         }
+    }
+
+    private fun clearLayout(@LayoutRes layoutId: Int) {
+        poolGeneration.incrementAndGet()
+        warmingCounts.clear()
+        if (!factoryIsolation) {
+            pool.remove(layoutId.toLong())
+            return
+        }
+        pool.keys.removeIf { key ->
+            (key ushr 32).toInt() == layoutId
+        }
+    }
+
+    private fun isPoolingDisabled(@LayoutRes layoutId: Int): Boolean {
+        return poolingDisabled.isNotEmpty() && layoutId in poolingDisabled
     }
 
     /**
@@ -337,7 +381,7 @@ class ViewPool {
     }
 
     private fun canAcceptWarmView(key: Long, @LayoutRes layoutId: Int): Boolean {
-        return (pool[key]?.size ?: 0) < maxSizeFor(layoutId)
+        return !isPoolingDisabled(layoutId) && (pool[key]?.size ?: 0) < maxSizeFor(layoutId)
     }
 
     private fun dequeFor(key: Long): ConcurrentLinkedDeque<View> {

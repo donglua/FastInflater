@@ -172,6 +172,24 @@ class FastInflater private constructor(context: Context) {
     }
 
     /**
+     * 控制某个布局是否允许进入 FastInflater 池。
+     *
+     * 如果布局里包含生命周期敏感组件，例如自定义 View 在构造函数、onAttachedToWindow
+     * 或业务 bind 阶段注册 EventBus、宿主 Lifecycle observer、Activity callback 等，
+     * 且没有可靠的解绑/重置策略，应关闭池化。
+     *
+     * 关闭后该 layout 仍会通过正常 LayoutInflater inflate，但不会命中池、不会被 recycle
+     * 保存，也不会被 warmUp 预创建。
+     */
+    fun setPoolingEnabled(@LayoutRes layoutId: Int, enabled: Boolean) {
+        viewPool.setPoolingEnabled(layoutId, enabled)
+    }
+
+    fun isPoolingEnabled(@LayoutRes layoutId: Int): Boolean {
+        return viewPool.isPoolingEnabled(layoutId)
+    }
+
+    /**
      * 监听 warmUp 失败/降级事件。用于诊断哪些布局触发了主线程降级。
      */
     fun setWarmUpListener(listener: ViewPool.WarmUpListener?) {
