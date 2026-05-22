@@ -129,7 +129,17 @@ class ViewPool {
         while (true) {
             val view = deque.poll() ?: return null
             if (!canAttachToParent(parent, view)) {
-                continue
+                deque.offerLast(view)
+                val remaining = (deque.size - 1).coerceAtLeast(0)
+                repeat(remaining) {
+                    val next = deque.poll() ?: return null
+                    if (canAttachToParent(parent, next)) {
+                        policies[layoutId]?.onObtain(next)
+                        return next
+                    }
+                    deque.offerLast(next)
+                }
+                return null
             }
             // 只跑用户自定义的 onObtain 钩子；默认情况下 obtain 是纯 poll
             policies[layoutId]?.onObtain(view)
