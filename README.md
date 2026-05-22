@@ -77,10 +77,13 @@ FastInflater.get().inflateAsync(context, R.layout.item_feed, parent) { view ->
 ### RecyclerView 集成
 
 ```kotlin
-// 预热 + 安装
-FastRecycledViewPool.install(recyclerView, warmUpLayouts = listOf(
+// 预热 + 安装创建侧加速
+FastInflaterRecycler.install(recyclerView, warmUpLayouts = listOf(
     ViewPool.WarmUpEntry(R.layout.item_feed, 4)
 ))
+
+// 也可以只预热，不替换 RecyclerView.RecycledViewPool
+FastInflaterRecycler.preload(recyclerView, R.layout.item_feed, count = 4)
 
 // Adapter 中让 viewType == layoutId
 override fun getItemViewType(position: Int) = R.layout.item_feed
@@ -91,7 +94,7 @@ override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MyViewHolder 
 }
 ```
 
-FastInflater 只在创建侧加速，不参与 RecyclerView 的回收流程，不会出现双池冲突。
+FastInflater 只在 `onCreateViewHolder` 创建侧加速，不参与 RecyclerView 的回收流程，不会出现双池冲突。
 
 ### DataBinding
 

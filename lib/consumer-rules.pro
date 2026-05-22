@@ -4,6 +4,7 @@
 # 保留公开 API
 -keep class com.github.donglua.fastinflater.FastInflater { *; }
 -keep class com.github.donglua.fastinflater.FastDataBinding { *; }
+-keep class com.github.donglua.fastinflater.FastInflaterRecycler { *; }
 -keep class com.github.donglua.fastinflater.FastRecycledViewPool { *; }
 -keep class com.github.donglua.fastinflater.ViewPool { *; }
 -keep class com.github.donglua.fastinflater.ViewPool$WarmUpEntry { *; }

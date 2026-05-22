@@ -16,8 +16,8 @@ import androidx.recyclerview.widget.RecyclerView
  *
  * 使用方式：
  * ```
- * // 设置 pool
- * FastRecycledViewPool.install(recyclerView, warmUpLayouts = listOf(
+ * // 设置创建侧预热
+ * FastInflaterRecycler.install(recyclerView, warmUpLayouts = listOf(
  *     ViewPool.WarmUpEntry(R.layout.item_feed, 4)
  * ))
  *
@@ -42,7 +42,8 @@ class FastRecycledViewPool(
 
     companion object {
         /**
-         * 便捷方法：为 RecyclerView 设置 FastRecycledViewPool 并预热指定布局。
+         * 兼容旧入口。新代码建议使用 [FastInflaterRecycler.install]，
+         * 语义更接近“RecyclerView 创建侧预热”。
          *
          * 预热的 View 会进入 FastInflater 的池，当 Adapter.onCreateViewHolder
          * 调用 FastInflater.get().inflate() 时会优先命中这些预热的 View。
@@ -51,12 +52,7 @@ class FastRecycledViewPool(
             recyclerView: RecyclerView,
             warmUpLayouts: List<ViewPool.WarmUpEntry> = emptyList()
         ) {
-            val pool = FastRecycledViewPool(recyclerView.context)
-            recyclerView.setRecycledViewPool(pool)
-
-            if (warmUpLayouts.isNotEmpty()) {
-                FastInflater.get().warmUp(recyclerView.context, warmUpLayouts)
-            }
+            FastInflaterRecycler.install(recyclerView, warmUpLayouts)
         }
     }
 }
