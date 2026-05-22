@@ -10,6 +10,7 @@ import androidx.annotation.LayoutRes
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 class ViewPool {
 
@@ -30,6 +31,7 @@ class ViewPool {
     private val pool = ConcurrentHashMap<Long, ConcurrentLinkedDeque<View>>()
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
     private val perLayoutMaxSize = ConcurrentHashMap<Int, Int>()
+    private val warmingCounts = ConcurrentHashMap<Long, AtomicInteger>()
     /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
     private val mainThreadOnly = ConcurrentHashMap.newKeySet<Int>()
     private val executor = Executors.newFixedThreadPool(
@@ -74,6 +76,7 @@ class ViewPool {
         if (factoryIsolation == enabled) return
         factoryIsolation = enabled
         pool.clear()
+        warmingCounts.clear()
     }
 
     fun isFactoryIsolationEnabled(): Boolean = factoryIsolation
@@ -136,19 +139,23 @@ class ViewPool {
     fun isMainThreadOnly(@LayoutRes layoutId: Int): Boolean = layoutId in mainThreadOnly
 
     fun warmUp(context: Context, @LayoutRes layoutId: Int, count: Int = 1) {
+        val key = keyFor(layoutId, context)
+        val warmCount = reserveWarmUp(key, layoutId, count)
+        if (warmCount <= 0) return
+
         // 已知必须主线程：直接走主线程 IdleHandler
         if (layoutId in mainThreadOnly) {
-            warmUpOnMainIdle(context, layoutId, count)
+            warmUpOnMainIdle(context, layoutId, key, warmCount)
             return
         }
         executor.execute {
             val inflater = LayoutInflater.from(context).cloneInContext(context)
-            val key = keyFor(layoutId, context)
-            repeat(count) { i ->
+            repeat(warmCount) { i ->
+                var transferredToMain = false
                 try {
                     val view = inflater.inflate(layoutId, null, false)
-                    val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
-                    if (deque.size < maxSizeFor(layoutId)) {
+                    val deque = dequeFor(key)
+                    if (canAcceptWarmView(key, layoutId)) {
                         deque.offer(view)
                     }
                 } catch (e: Throwable) {
@@ -159,11 +166,16 @@ class ViewPool {
                     if (newlyMarked) {
                         warmUpListener?.onMarkedAsMainThreadOnly(layoutId)
                     }
-                    val remaining = count - i
+                    val remaining = warmCount - i
                     if (remaining > 0) {
-                        warmUpOnMainIdle(context, layoutId, remaining)
+                        warmUpOnMainIdle(context, layoutId, key, remaining)
+                        transferredToMain = true
                     }
                     return@execute
+                } finally {
+                    if (!transferredToMain) {
+                        finishWarmUp(key, 1)
+                    }
                 }
             }
         }
@@ -173,12 +185,11 @@ class ViewPool {
      * 在主线程 IdleHandler 中分批预热，避免抢占用户交互帧。
      * 每次 idle 只 inflate 1 个，避免长时间占用主线程。
      */
-    private fun warmUpOnMainIdle(context: Context, @LayoutRes layoutId: Int, count: Int) {
+    private fun warmUpOnMainIdle(context: Context, @LayoutRes layoutId: Int, key: Long, count: Int) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { warmUpOnMainIdle(context, layoutId, count) }
+            mainHandler.post { warmUpOnMainIdle(context, layoutId, key, count) }
             return
         }
-        val key = keyFor(layoutId, context)
         Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
             private var remaining = count
 
@@ -186,15 +197,17 @@ class ViewPool {
                 if (remaining <= 0) return false
                 try {
                     val view = LayoutInflater.from(context).inflate(layoutId, null, false)
-                    val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
-                    if (deque.size < maxSizeFor(layoutId)) {
+                    val deque = dequeFor(key)
+                    if (canAcceptWarmView(key, layoutId)) {
                         deque.offer(view)
                     }
                 } catch (_: Throwable) {
                     // 主线程也失败，说明布局本身有问题，放弃
+                    finishWarmUp(key, remaining)
                     return false
                 }
                 remaining--
+                finishWarmUp(key, 1)
                 return remaining > 0
             }
         })
@@ -245,6 +258,7 @@ class ViewPool {
 
     fun clear() {
         pool.clear()
+        warmingCounts.clear()
     }
 
     fun trimToSize(keep: Int) {
@@ -272,6 +286,44 @@ class ViewPool {
         val inflater = LayoutInflater.from(context)
         val factory: Any? = inflater.factory2 ?: inflater.factory
         return factory?.javaClass?.hashCode() ?: 0
+    }
+
+    private fun reserveWarmUp(key: Long, @LayoutRes layoutId: Int, requested: Int): Int {
+        if (requested <= 0) return 0
+
+        val maxSize = maxSizeFor(layoutId)
+        if (maxSize <= 0) return 0
+
+        val warming = warmingCounts.getOrPut(key) { AtomicInteger(0) }
+        while (true) {
+            val currentWarming = warming.get()
+            val currentPoolSize = pool[key]?.size ?: 0
+            val capacity = maxSize - currentPoolSize - currentWarming
+            if (capacity <= 0) return 0
+
+            val reserved = requested.coerceAtMost(capacity)
+            if (warming.compareAndSet(currentWarming, currentWarming + reserved)) {
+                return reserved
+            }
+        }
+    }
+
+    private fun finishWarmUp(key: Long, count: Int) {
+        if (count <= 0) return
+
+        val warming = warmingCounts[key] ?: return
+        val remaining = warming.addAndGet(-count)
+        if (remaining <= 0) {
+            warmingCounts.remove(key, warming)
+        }
+    }
+
+    private fun canAcceptWarmView(key: Long, @LayoutRes layoutId: Int): Boolean {
+        return (pool[key]?.size ?: 0) < maxSizeFor(layoutId)
+    }
+
+    private fun dequeFor(key: Long): ConcurrentLinkedDeque<View> {
+        return pool.getOrPut(key) { ConcurrentLinkedDeque() }
     }
 
     data class WarmUpEntry(

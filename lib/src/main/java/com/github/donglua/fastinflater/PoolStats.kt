@@ -33,12 +33,14 @@ object PoolStats {
     private val global = Stat()
     private val perLayout = ConcurrentHashMap<Int, Stat>()
 
+    @PublishedApi
     internal fun recordHit(@LayoutRes layoutId: Int) {
         if (!enabled) return
         global.hits.incrementAndGet()
         perLayout.getOrPut(layoutId) { Stat() }.hits.incrementAndGet()
     }
 
+    @PublishedApi
     internal fun recordMiss(@LayoutRes layoutId: Int) {
         if (!enabled) return
         global.misses.incrementAndGet()

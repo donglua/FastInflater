@@ -17,19 +17,19 @@ object FastDataBinding {
     ): T {
         val pooled = obtainPooled(layoutId, context, parent)
         if (pooled != null) {
-            PoolStats.recordHit(layoutId)
-            InflateTracker.recordInflate(layoutId, 0)
             val binding = DataBindingUtil.bind<T>(pooled)
             if (binding != null) {
+                PoolStats.recordHit(layoutId)
+                InflateTracker.recordInflate(layoutId, 0)
                 if (attachToRoot && parent != null) {
                     parent.addView(pooled)
                 }
                 return binding
             }
             // bind 失败（binding tag 丢失），fallback 到正常 inflate
-        } else {
-            PoolStats.recordMiss(layoutId)
         }
+
+        PoolStats.recordMiss(layoutId)
 
         val inflater = LayoutInflater.from(context)
         return InflateTracker.track(layoutId) {
@@ -47,18 +47,18 @@ object FastDataBinding {
         val fast = FastInflater.get()
         val pooled = fast.obtainFromPool(layoutId, context, parent)
         if (pooled != null) {
-            PoolStats.recordHit(layoutId)
-            InflateTracker.recordInflate(layoutId, 0)
             val binding = DataBindingUtil.bind<T>(pooled)
             if (binding != null) {
+                PoolStats.recordHit(layoutId)
+                InflateTracker.recordInflate(layoutId, 0)
                 if (attachToRoot && parent != null) {
                     parent.addView(pooled)
                 }
                 return binding
             }
-        } else {
-            PoolStats.recordMiss(layoutId)
         }
+
+        PoolStats.recordMiss(layoutId)
 
         val inflater = LayoutInflater.from(context)
         return InflateTracker.track(layoutId) {
