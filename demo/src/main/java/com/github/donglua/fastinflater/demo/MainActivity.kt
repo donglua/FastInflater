@@ -43,7 +43,7 @@ class MainActivity : AppCompatActivity() {
                     val name = resources.getResourceEntryName(id)
                     append(name).append(" ")
                     append("count=").append(stat.count.get()).append(" ")
-                    append("total=").append(stat.totalMs.get()).append("ms ")
+                    append("total=").append(stat.totalMs).append("ms ")
                     append("avg=").append(stat.avgMs).append("ms\n")
                 }
             }
