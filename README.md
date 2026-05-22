@@ -168,7 +168,7 @@ InflateTracker.enabled = false
 PoolStats.enabled = false
 ```
 
-关闭后 `inflate` 池命中是纯 poll，miss 是纯 `LayoutInflater.inflate`，没有任何额外计算。
+关闭后不会执行耗时计时、原子自增或统计 Map 写入；`inflate` 只保留池查询/回退 inflate 所需的最小逻辑。
 
 ### 主线程依赖的布局
 
