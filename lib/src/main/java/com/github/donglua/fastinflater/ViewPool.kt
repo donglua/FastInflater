@@ -21,7 +21,13 @@ class ViewPool {
         fun onMarkedAsMainThreadOnly(@LayoutRes layoutId: Int) {}
     }
 
-    private val pool = ConcurrentHashMap<PoolKey, ConcurrentLinkedDeque<View>>()
+    /**
+     * Pool key 用 Long 表示。
+     * - 默认（factoryIsolation = false）：key = layoutId（直接放低 32 位），不访问 Context
+     * - 开启 factory 隔离时：高 32 位 layoutId，低 32 位 factory hash
+     * 用 Long 而非 data class 是为了避免每次 obtain/recycle 都分配对象。
+     */
+    private val pool = ConcurrentHashMap<Long, ConcurrentLinkedDeque<View>>()
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
     private val perLayoutMaxSize = ConcurrentHashMap<Int, Int>()
     /** 已知必须在主线程 inflate 的布局，warmUp 会直接走主线程 IdleHandler。 */
@@ -33,6 +39,9 @@ class ViewPool {
 
     @Volatile
     private var warmUpListener: WarmUpListener? = null
+
+    @Volatile
+    private var factoryIsolation = false
 
     private var defaultMaxPoolSize = 4
 
@@ -52,8 +61,25 @@ class ViewPool {
         policies[layoutId] = policy
     }
 
+    /**
+     * 启用 factory 隔离。开启后 pool key 会同时考虑 LayoutInflater.factory2 的类型，
+     * 避免不同 Activity/Theme（持有不同 Factory2）下的 View 串池。
+     *
+     * 默认关闭。绝大多数项目全程使用同一个 AppCompat Factory2，不需要开启。
+     * 开启后每次 obtain/recycle 都需要访问 LayoutInflater.factory2，有少量额外开销。
+     *
+     * 切换隔离模式时会清空池，因为旧 key 已失效。
+     */
+    fun setFactoryIsolation(enabled: Boolean) {
+        if (factoryIsolation == enabled) return
+        factoryIsolation = enabled
+        pool.clear()
+    }
+
+    fun isFactoryIsolationEnabled(): Boolean = factoryIsolation
+
     fun obtain(@LayoutRes layoutId: Int, context: Context, parent: ViewGroup? = null): View? {
-        val key = PoolKey(layoutId, fingerprint(context))
+        val key = keyFor(layoutId, context)
         return pool[key]?.poll()?.also { view ->
             val policy = policies[layoutId]
             if (policy != null) {
@@ -69,7 +95,7 @@ class ViewPool {
         if (policy != null && !policy.canRecycle(view)) {
             return
         }
-        val key = PoolKey(layoutId, fingerprint(view.context))
+        val key = keyFor(layoutId, view.context)
         val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
         if (deque.size < maxSizeFor(layoutId)) {
             policy?.onRecycle(view) ?: ViewCleaner.clean(view)
@@ -110,7 +136,7 @@ class ViewPool {
         }
         executor.execute {
             val inflater = LayoutInflater.from(context).cloneInContext(context)
-            val key = PoolKey(layoutId, fingerprint(context))
+            val key = keyFor(layoutId, context)
             repeat(count) { i ->
                 try {
                     val view = inflater.inflate(layoutId, null, false)
@@ -145,7 +171,7 @@ class ViewPool {
             mainHandler.post { warmUpOnMainIdle(context, layoutId, count) }
             return
         }
-        val key = PoolKey(layoutId, fingerprint(context))
+        val key = keyFor(layoutId, context)
         Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
             private var remaining = count
 
@@ -193,7 +219,7 @@ class ViewPool {
     }
 
     fun warmUpOnIdle(context: Context, layouts: List<WarmUpEntry>) {
-        android.os.Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
+        Looper.myQueue().addIdleHandler(object : android.os.MessageQueue.IdleHandler {
             private var index = 0
 
             override fun queueIdle(): Boolean {
@@ -206,7 +232,7 @@ class ViewPool {
     }
 
     fun poolSize(@LayoutRes layoutId: Int, context: Context): Int {
-        val key = PoolKey(layoutId, fingerprint(context))
+        val key = keyFor(layoutId, context)
         return pool[key]?.size ?: 0
     }
 
@@ -222,21 +248,24 @@ class ViewPool {
         }
     }
 
-    private fun fingerprint(context: Context): String {
-        val inflater = LayoutInflater.from(context)
-        val factory2 = inflater.factory2
-        val factory = inflater.factory
-        return when {
-            factory2 != null -> factory2.javaClass.name
-            factory != null -> factory.javaClass.name
-            else -> ""
+    /**
+     * 计算 pool key。默认仅基于 layoutId，零额外开销、不访问 Context。
+     * 开启 factoryIsolation 时，把 LayoutInflater.factory2 的 class hash 编入低 32 位。
+     */
+    private fun keyFor(@LayoutRes layoutId: Int, context: Context): Long {
+        if (!factoryIsolation) {
+            return layoutId.toLong()
         }
+        // 高 32 位 layoutId，低 32 位 factory hash
+        val hash = factoryHash(context)
+        return (layoutId.toLong() shl 32) or (hash.toLong() and 0xFFFFFFFFL)
     }
 
-    private data class PoolKey(
-        @param:LayoutRes val layoutId: Int,
-        val factoryFingerprint: String
-    )
+    private fun factoryHash(context: Context): Int {
+        val inflater = LayoutInflater.from(context)
+        val factory: Any? = inflater.factory2 ?: inflater.factory
+        return factory?.javaClass?.hashCode() ?: 0
+    }
 
     data class WarmUpEntry(
         @param:LayoutRes val layoutId: Int,

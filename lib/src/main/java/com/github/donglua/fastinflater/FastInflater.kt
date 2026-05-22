@@ -178,6 +178,19 @@ class FastInflater private constructor(context: Context) {
         viewPool.setWarmUpListener(listener)
     }
 
+    /**
+     * 启用 factory 隔离。开启后，pool 会区分不同 LayoutInflater.factory2 的 View，
+     * 避免不同 Activity/Theme 间串池。
+     *
+     * 默认关闭。绝大多数项目全程使用同一个 AppCompat Factory2，不需要开启。
+     * 开启后每次 obtain/recycle 都需要访问 LayoutInflater.factory2，有少量额外开销。
+     *
+     * 切换隔离模式时会清空池，因为旧 key 已失效。
+     */
+    fun setFactoryIsolation(enabled: Boolean) {
+        viewPool.setFactoryIsolation(enabled)
+    }
+
     companion object {
         @Volatile
         private var instance: FastInflater? = null
