@@ -51,6 +51,26 @@ class ViewPoolTest {
         assertThat(obtained).isSameInstanceAs(view)
     }
 
+    @Test
+    fun `obtain applies parent layout params when warm view has none`() {
+        val layoutId = context.resources.getIdentifier(
+            "fast_inflater_match_parent_item",
+            "layout",
+            "com.github.donglua.fastinflater.test"
+        )
+        val view = View(context)
+        pool.recycle(layoutId, view)
+
+        val parent = FrameLayout(context)
+        val obtained = pool.obtain(layoutId, context, parent)
+
+        assertThat(obtained).isSameInstanceAs(view)
+        val params = obtained!!.layoutParams
+        assertThat(params).isInstanceOf(FrameLayout.LayoutParams::class.java)
+        assertThat(params.width).isEqualTo(ViewGroup.LayoutParams.MATCH_PARENT)
+        assertThat(params.height).isEqualTo((68 * context.resources.displayMetrics.density).toInt())
+    }
+
     // ---------------------------------------------------------------
     // 3. pool respects max size (default 4)
     // ---------------------------------------------------------------

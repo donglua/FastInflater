@@ -3,6 +3,7 @@ package com.github.donglua.fastinflater
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Xml
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -128,12 +129,12 @@ class ViewPool {
         val deque = pool[key] ?: return null
         while (true) {
             val view = deque.poll() ?: return null
-            if (!canAttachToParent(parent, view)) {
+            if (!ensureAttachableToParent(layoutId, context, parent, view)) {
                 deque.offerLast(view)
                 val remaining = (deque.size - 1).coerceAtLeast(0)
                 repeat(remaining) {
                     val next = deque.poll() ?: return null
-                    if (canAttachToParent(parent, next)) {
+                    if (ensureAttachableToParent(layoutId, context, parent, next)) {
                         policies[layoutId]?.onObtain(next)
                         return next
                     }
@@ -489,6 +490,52 @@ class ViewPool {
 
     private fun canEnterPool(@LayoutRes layoutId: Int, view: View): Boolean {
         return policies[layoutId]?.canRecycle(view) ?: true
+    }
+
+    private fun ensureAttachableToParent(
+        @LayoutRes layoutId: Int,
+        context: Context,
+        parent: ViewGroup?,
+        view: View
+    ): Boolean {
+        parent ?: return true
+        val params = view.layoutParams
+        if (params == null || !canAttachToParent(parent, view)) {
+            view.layoutParams = generateRootLayoutParams(context, layoutId, parent) ?: return params == null
+        }
+        return canAttachToParent(parent, view)
+    }
+
+    private fun generateRootLayoutParams(
+        context: Context,
+        @LayoutRes layoutId: Int,
+        parent: ViewGroup
+    ): ViewGroup.LayoutParams? {
+        val parser = runCatching { context.resources.getLayout(layoutId) }.getOrNull() ?: return null
+        try {
+            var dataDepth = -1
+            var eventType = parser.eventType
+            while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG) {
+                    val tagName = parser.name
+                    if (tagName == "data") {
+                        dataDepth = parser.depth
+                    } else if (tagName != "layout" && dataDepth < 0) {
+                        return runCatching {
+                            parent.generateLayoutParams(Xml.asAttributeSet(parser))
+                        }.getOrNull()
+                    }
+                } else if (eventType == org.xmlpull.v1.XmlPullParser.END_TAG &&
+                    dataDepth == parser.depth && parser.name == "data"
+                ) {
+                    dataDepth = -1
+                }
+                eventType = parser.next()
+            }
+        } finally {
+            parser.close()
+        }
+        return null
     }
 
     private fun canAttachToParent(parent: ViewGroup?, view: View): Boolean {
