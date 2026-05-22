@@ -18,7 +18,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.donglua:FastInflater:0.4.0")
+    implementation("com.github.donglua:FastInflater:0.5.0")
 }
 ```
 
@@ -236,7 +236,7 @@ InflateTracker.enabled = false
 PoolStats.enabled = false
 ```
 
-关闭后不会执行耗时计时、原子自增或统计 Map 写入；`inflate` 只保留池查询/回退 inflate 所需的最小逻辑。
+关闭后 `PoolStats.recordHit()` / `InflateTracker.recordInflate()` 等记录入口仍可能被调用，但会通过 `enabled` 快速返回；不会执行耗时计时、原子自增或统计 Map 写入。`inflate` 只保留池查询/回退 inflate 所需的最小逻辑。
 
 ### 主线程依赖的布局
 
