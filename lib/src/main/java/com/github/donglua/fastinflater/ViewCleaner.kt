@@ -19,6 +19,10 @@ object ViewCleaner {
     }
 
     private fun cleanSingle(view: View) {
+        if (view is PoolableView) {
+            view.onRecycleForPool()
+        }
+
         view.setOnClickListener(null)
         view.setOnLongClickListener(null)
         view.setOnTouchListener(null)

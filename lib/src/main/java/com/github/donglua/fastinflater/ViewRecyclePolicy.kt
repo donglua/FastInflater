@@ -7,6 +7,8 @@ import android.view.View
  *
  * 对于有复杂内部状态的自定义布局，默认的 [ViewCleaner] 无法保证完全清理干净。
  * 通过注册 Policy，调用方可以精确控制哪些状态需要重置。
+ * 如果只是单个自定义 View 持有内部脏状态，也可以让该 View 实现 [PoolableView]，
+ * 由 [ViewCleaner] 在回收时递归清理。
  *
  * 如果布局包含生命周期敏感组件，且组件在构造、attach 或 bind 阶段注册了 EventBus、
  * 宿主 Lifecycle observer、Activity callback 等外部监听，必须在 [onRecycle] 中可靠解绑。

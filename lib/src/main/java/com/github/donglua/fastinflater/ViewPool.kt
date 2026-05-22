@@ -127,15 +127,10 @@ class ViewPool {
      */
     fun recycle(@LayoutRes layoutId: Int, view: View) {
         if (isPoolingDisabled(layoutId)) return
-        val policy = policies[layoutId]
-        if (policy != null && !policy.canRecycle(view)) {
-            return
-        }
         val key = keyFor(layoutId, view.context)
         val deque = pool.getOrPut(key) { ConcurrentLinkedDeque() }
         if (deque.size < maxSizeFor(layoutId)) {
-            policy?.onRecycle(view) ?: ViewCleaner.clean(view)
-            deque.offer(view)
+            prepareForPool(layoutId, view)?.let(deque::offer)
         }
     }
 
@@ -187,7 +182,9 @@ class ViewPool {
                 try {
                     val view = inflater.inflate(layoutId, null, false)
                     val deque = dequeFor(key)
-                    if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId)) {
+                    if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId) &&
+                        canEnterPool(layoutId, view)
+                    ) {
                         deque.offer(view)
                     }
                 } catch (e: Throwable) {
@@ -240,7 +237,9 @@ class ViewPool {
                 try {
                     val view = LayoutInflater.from(context).inflate(layoutId, null, false)
                     val deque = dequeFor(key)
-                    if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId)) {
+                    if (!isStaleGeneration(generation) && canAcceptWarmView(key, layoutId) &&
+                        canEnterPool(layoutId, view)
+                    ) {
                         deque.offer(view)
                     }
                 } catch (_: Throwable) {
@@ -382,6 +381,18 @@ class ViewPool {
 
     private fun canAcceptWarmView(key: Long, @LayoutRes layoutId: Int): Boolean {
         return !isPoolingDisabled(layoutId) && (pool[key]?.size ?: 0) < maxSizeFor(layoutId)
+    }
+
+    private fun prepareForPool(@LayoutRes layoutId: Int, view: View): View? {
+        if (!canEnterPool(layoutId, view)) {
+            return null
+        }
+        policies[layoutId]?.onRecycle(view) ?: ViewCleaner.clean(view)
+        return view
+    }
+
+    private fun canEnterPool(@LayoutRes layoutId: Int, view: View): Boolean {
+        return policies[layoutId]?.canRecycle(view) ?: true
     }
 
     private fun dequeFor(key: Long): ConcurrentLinkedDeque<View> {

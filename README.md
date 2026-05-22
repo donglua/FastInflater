@@ -39,6 +39,7 @@ dependencies {
 - **RecyclerView 集成** — 预热加速 ViewHolder 首次创建
 - **DataBinding 支持** — `FastDataBinding` 兼容池化复用
 - **自定义回收策略** — `ViewRecyclePolicy` 接口，精确控制 View 状态清理
+- **自定义 View 自清理** — 自定义 View 可实现 `PoolableView`，回收时清理内部脏状态
 - **生命周期敏感布局保护** — 可按 layout 关闭池化，避免 EventBus/Lifecycle 监听脱离宿主
 - **内存压力响应** — 监听 trimMemory 分级清理；Configuration 变化自动清池
 
@@ -110,9 +111,37 @@ val binding = FastDataBinding.inflate<ItemFeedBinding>(
 
 ### 自定义回收策略
 
+默认 `ViewCleaner` 只清理 Android 基础 View 状态，例如文本、图片、listener、alpha、translation、scale、scroll 和动画。业务自定义状态不会被自动识别，例如：
+
+- 自定义 View 内部的展开/折叠变量、选中缓存、加载状态
+- 运行时替换的特殊背景、前景、Drawable callback
+- bind 阶段写入但下一次 bind 不一定覆盖的自定义属性
+
+这类 layout 必须补充清理逻辑，否则复用时可能出现上一条数据的头像、背景、展开状态挂到下一条数据上的 UI 错乱。
+
+单个自定义 View 可以实现 `PoolableView`：
+
+```kotlin
+class ExpandableUserView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : FrameLayout(context, attrs), PoolableView {
+
+    private var expanded = false
+
+    override fun onRecycleForPool() {
+        expanded = false
+        background = null
+    }
+}
+```
+
+布局级状态或多个子 View 的组合状态，使用 `ViewRecyclePolicy`：
+
 ```kotlin
 FastInflater.get().registerPolicy(R.layout.item_feed, object : ViewRecyclePolicy {
     override fun onRecycle(view: View) {
+        ViewCleaner.clean(view)
         view.findViewById<ImageView>(R.id.avatar).setImageDrawable(null)
         view.findViewById<TextView>(R.id.title).text = null
     }
