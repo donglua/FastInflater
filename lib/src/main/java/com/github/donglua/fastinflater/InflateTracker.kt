@@ -65,10 +65,8 @@ object InflateTracker {
         val totalNs = AtomicLong(0)
         val maxNs = AtomicLong(0)
 
-        /** 兼容旧 API：总耗时（毫秒） */
-        val totalMs: AtomicLong get() = AtomicLong(totalNs.get() / 1_000_000)
-        val maxMs: AtomicLong get() = AtomicLong(maxNs.get() / 1_000_000)
-
+        val totalMs: Long get() = totalNs.get() / 1_000_000
+        val maxMs: Long get() = maxNs.get() / 1_000_000
         val avgMs: Long get() = if (count.get() > 0) totalNs.get() / 1_000_000 / count.get() else 0
         val avgUs: Long get() = if (count.get() > 0) totalNs.get() / 1_000 / count.get() else 0
     }
