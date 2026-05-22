@@ -15,6 +15,7 @@ class FastInflater private constructor(context: Context) {
 
     private val appContext = context.applicationContext
     private val viewPool = ViewPool()
+    private val mainHandler = Handler(Looper.getMainLooper())
     // 单线程避免 LayoutInflater 并发访问 Resources 的线程安全问题（Android 8.x 及以下）
     private val asyncExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "FastInflater-async").apply { isDaemon = true }
@@ -87,14 +88,13 @@ class FastInflater private constructor(context: Context) {
 
         // 已知必须主线程：直接在主线程 inflate，避免后台崩溃
         if (viewPool.isMainThreadOnly(layoutId)) {
-            val handler = Handler(Looper.getMainLooper())
             val run = Runnable {
                 val view = InflateTracker.track(layoutId) {
                     LayoutInflater.from(context).inflate(layoutId, parent, false)
                 }
                 callback(view)
             }
-            if (Looper.myLooper() == Looper.getMainLooper()) run.run() else handler.post(run)
+            if (Looper.myLooper() == Looper.getMainLooper()) run.run() else mainHandler.post(run)
             return
         }
 
@@ -108,7 +108,7 @@ class FastInflater private constructor(context: Context) {
             } catch (e: Throwable) {
                 // 后台 inflate 失败，标记并降级到主线程重试
                 viewPool.markAsMainThreadOnly(layoutId)
-                Handler(Looper.getMainLooper()).post {
+                mainHandler.post {
                     val view = InflateTracker.track(layoutId) {
                         LayoutInflater.from(context).inflate(layoutId, parent, false)
                     }
@@ -189,6 +189,19 @@ class FastInflater private constructor(context: Context) {
      */
     fun setFactoryIsolation(enabled: Boolean) {
         viewPool.setFactoryIsolation(enabled)
+    }
+
+    /**
+     * 一键开关诊断埋点（[InflateTracker] + [PoolStats]）。
+     *
+     * 默认开启——耗时追踪和命中率监控是这个库的核心诊断价值。
+     * 调优完成后可以关闭，彻底消除热路径上的 `nanoTime` / 原子自增 / HashMap 查询开销。
+     *
+     * 也可以单独控制：[InflateTracker.enabled] / [PoolStats.enabled]。
+     */
+    fun setMetricsEnabled(enabled: Boolean) {
+        InflateTracker.enabled = enabled
+        PoolStats.enabled = enabled
     }
 
     companion object {
