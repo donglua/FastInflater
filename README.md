@@ -18,7 +18,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.donglua:FastInflater:0.3.0")
+    implementation("com.github.donglua:FastInflater:0.4.0")
 }
 ```
 
