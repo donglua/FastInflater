@@ -23,15 +23,24 @@ import java.util.concurrent.atomic.AtomicLong
  */
 object PoolStats {
 
+    /**
+     * 全局开关。默认开启——命中率数据是这个库的核心诊断价值。
+     * 调优完成、上线后可以关掉以彻底消除热路径上的原子自增和 HashMap 查询。
+     */
+    @Volatile
+    var enabled: Boolean = true
+
     private val global = Stat()
     private val perLayout = ConcurrentHashMap<Int, Stat>()
 
     internal fun recordHit(@LayoutRes layoutId: Int) {
+        if (!enabled) return
         global.hits.incrementAndGet()
         perLayout.getOrPut(layoutId) { Stat() }.hits.incrementAndGet()
     }
 
     internal fun recordMiss(@LayoutRes layoutId: Int) {
+        if (!enabled) return
         global.misses.incrementAndGet()
         perLayout.getOrPut(layoutId) { Stat() }.misses.incrementAndGet()
     }

@@ -155,6 +155,21 @@ FastInflater.get().autoTune()
 FastInflater.get().setMaxPoolSize(R.layout.item_feed, 8)
 ```
 
+### 关闭埋点（可选）
+
+诊断埋点（`InflateTracker` + `PoolStats`）默认开启——这是这个库的核心诊断价值。调优完成、上线后如果想彻底消除热路径上的 `nanoTime` / 原子自增 / HashMap 查询开销，可以一键关闭：
+
+```kotlin
+// 一键关闭两个埋点
+FastInflater.get().setMetricsEnabled(false)
+
+// 或单独控制
+InflateTracker.enabled = false
+PoolStats.enabled = false
+```
+
+关闭后 `inflate` 池命中是纯 poll，miss 是纯 `LayoutInflater.inflate`，没有任何额外计算。
+
 ### 主线程依赖的布局
 
 部分 View 不能后台 inflate（ComposeView、WebView、含 LiveData 的自定义 View）。FastInflater 会自动检测并降级到主线程 IdleHandler，也可以预先标记：

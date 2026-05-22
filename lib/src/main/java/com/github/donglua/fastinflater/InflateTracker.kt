@@ -7,6 +7,15 @@ import java.util.concurrent.atomic.AtomicLong
 
 object InflateTracker {
 
+    /**
+     * 全局开关。默认开启——耗时追踪是这个库的核心诊断价值。
+     * 调优完成后可关闭，彻底消除热路径上的 nanoTime / HashMap / CAS 开销。
+     *
+     * 关闭后 [track] 仅调用 block()，不计时；[recordInflate] 直接 return。
+     */
+    @Volatile
+    var enabled: Boolean = true
+
     private val stats = ConcurrentHashMap<Int, LayoutStat>()
     private var reporter: ((Map<Int, LayoutStat>) -> Unit)? = null
 
@@ -15,6 +24,7 @@ object InflateTracker {
     }
 
     fun recordInflate(@LayoutRes layoutId: Int, durationNs: Long) {
+        if (!enabled) return
         val stat = stats.getOrPut(layoutId) { LayoutStat() }
         stat.count.incrementAndGet()
         stat.totalNs.addAndGet(durationNs)
@@ -43,6 +53,7 @@ object InflateTracker {
     }
 
     inline fun <T> track(@LayoutRes layoutId: Int, block: () -> T): T {
+        if (!enabled) return block()
         val start = System.nanoTime()
         val result = block()
         recordInflate(layoutId, System.nanoTime() - start)
