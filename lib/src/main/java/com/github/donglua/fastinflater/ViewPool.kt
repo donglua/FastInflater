@@ -78,18 +78,25 @@ class ViewPool {
 
     fun isFactoryIsolationEnabled(): Boolean = factoryIsolation
 
+    /**
+     * 从池中取一个 View。热路径：仅 poll + 可选的 policy.onObtain() 钩子。
+     *
+     * 池中的 View 在 [recycle] 时已经被清理过（默认 [ViewCleaner.clean] 或 [ViewRecyclePolicy.onRecycle]），
+     * View 处于 detached 状态、不会被外部修改，所以这里不再重复清理整棵 View 树。
+     */
     fun obtain(@LayoutRes layoutId: Int, context: Context, parent: ViewGroup? = null): View? {
         val key = keyFor(layoutId, context)
         return pool[key]?.poll()?.also { view ->
-            val policy = policies[layoutId]
-            if (policy != null) {
-                policy.onObtain(view)
-            } else {
-                ViewCleaner.clean(view)
-            }
+            // 只跑用户自定义的 onObtain 钩子；默认情况下 obtain 是纯 poll
+            policies[layoutId]?.onObtain(view)
         }
     }
 
+    /**
+     * 把 View 放回池中。冷路径：清理 View 状态（默认或自定义），然后入队。
+     *
+     * 清理在这里做，使 [obtain] 命中时无需再处理 View 树。
+     */
     fun recycle(@LayoutRes layoutId: Int, view: View) {
         val policy = policies[layoutId]
         if (policy != null && !policy.canRecycle(view)) {
