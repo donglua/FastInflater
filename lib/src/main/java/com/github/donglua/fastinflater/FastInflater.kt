@@ -15,13 +15,10 @@ class FastInflater private constructor(context: Context) {
 
     private val appContext = context.applicationContext
     private val viewPool = ViewPool()
-    private val registry = GeneratedLayoutRegistry()
     // 单线程避免 LayoutInflater 并发访问 Resources 的线程安全问题（Android 8.x 及以下）
     private val asyncExecutor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "FastInflater-async").apply { isDaemon = true }
     }
-
-    fun registry(): GeneratedLayoutRegistry = registry
 
     fun registerPolicy(@LayoutRes layoutId: Int, policy: ViewRecyclePolicy) {
         viewPool.registerPolicy(layoutId, policy)
@@ -61,13 +58,6 @@ class FastInflater private constructor(context: Context) {
 
         PoolStats.recordMiss(layoutId)
 
-        val creator = registry.resolve(context, layoutId)
-        if (creator != null) {
-            return InflateTracker.track(layoutId) {
-                creator.create(context, parent, attachToRoot)
-            }
-        }
-
         return InflateTracker.track(layoutId) {
             LayoutInflater.from(context).inflate(layoutId, parent, attachToRoot)
         }
@@ -95,15 +85,12 @@ class FastInflater private constructor(context: Context) {
 
         PoolStats.recordMiss(layoutId)
 
-        val creator = registry.resolve(context, layoutId)
-
         // 已知必须主线程：直接在主线程 inflate，避免后台崩溃
         if (viewPool.isMainThreadOnly(layoutId)) {
             val handler = Handler(Looper.getMainLooper())
             val run = Runnable {
                 val view = InflateTracker.track(layoutId) {
-                    if (creator != null) creator.create(context, parent, false)
-                    else LayoutInflater.from(context).inflate(layoutId, parent, false)
+                    LayoutInflater.from(context).inflate(layoutId, parent, false)
                 }
                 callback(view)
             }
@@ -114,12 +101,8 @@ class FastInflater private constructor(context: Context) {
         asyncExecutor.execute {
             try {
                 val view = InflateTracker.track(layoutId) {
-                    if (creator != null) {
-                        creator.create(context, parent, false)
-                    } else {
-                        LayoutInflater.from(context).cloneInContext(context)
-                            .inflate(layoutId, parent, false)
-                    }
+                    LayoutInflater.from(context).cloneInContext(context)
+                        .inflate(layoutId, parent, false)
                 }
                 parent?.post { callback(view) } ?: callback(view)
             } catch (e: Throwable) {
@@ -127,8 +110,7 @@ class FastInflater private constructor(context: Context) {
                 viewPool.markAsMainThreadOnly(layoutId)
                 Handler(Looper.getMainLooper()).post {
                     val view = InflateTracker.track(layoutId) {
-                        if (creator != null) creator.create(context, parent, false)
-                        else LayoutInflater.from(context).inflate(layoutId, parent, false)
+                        LayoutInflater.from(context).inflate(layoutId, parent, false)
                     }
                     callback(view)
                 }
