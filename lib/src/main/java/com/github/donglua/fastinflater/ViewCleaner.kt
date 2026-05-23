@@ -43,6 +43,15 @@ object ViewCleaner {
         view.clearAnimation()
         view.clearFocus()
 
+        // ⚠️ 以下属性会被归一化到"可见/可用"默认值。
+        // 如果布局 XML 中某些子 View 的静态默认值不是 VISIBLE / enabled / 无 contentDescription，
+        // 复用后需要在 bind 阶段或 ViewRecyclePolicy.onObtain() 中恢复。
+        view.visibility = View.VISIBLE
+        view.isEnabled = true
+        view.isSelected = false
+        view.isActivated = false
+        view.contentDescription = null
+
         if (view is TextView) {
             view.text = null
             view.setOnEditorActionListener(null)
@@ -55,6 +64,7 @@ object ViewCleaner {
         }
         if (view is CompoundButton) {
             view.setOnCheckedChangeListener(null)
+            view.isChecked = false
         }
     }
 }
