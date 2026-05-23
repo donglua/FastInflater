@@ -1,5 +1,6 @@
 package com.github.donglua.fastinflater
 
+import android.app.Activity
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -11,6 +12,7 @@ import com.google.common.truth.Truth.assertThat
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
@@ -49,6 +51,26 @@ class ViewPoolTest {
 
         val obtained = pool.obtain(LAYOUT_ID, context)
         assertThat(obtained).isSameInstanceAs(view)
+    }
+
+    @Test
+    fun `obtain applies parent layout params when warm view has none`() {
+        val layoutId = context.resources.getIdentifier(
+            "fast_inflater_match_parent_item",
+            "layout",
+            "com.github.donglua.fastinflater.test"
+        )
+        val view = View(context)
+        pool.recycle(layoutId, view)
+
+        val parent = FrameLayout(context)
+        val obtained = pool.obtain(layoutId, context, parent)
+
+        assertThat(obtained).isSameInstanceAs(view)
+        val params = obtained!!.layoutParams
+        assertThat(params).isInstanceOf(FrameLayout.LayoutParams::class.java)
+        assertThat(params.width).isEqualTo(ViewGroup.LayoutParams.MATCH_PARENT)
+        assertThat(params.height).isEqualTo((68 * context.resources.displayMetrics.density).toInt())
     }
 
     // ---------------------------------------------------------------
@@ -601,5 +623,183 @@ class ViewPoolTest {
         pool.markAsMainThreadOnly(LAYOUT_ID)
         pool.markAsMainThreadOnly(LAYOUT_ID)
         assertThat(callCount).isEqualTo(1)
+    }
+
+    // ---------------------------------------------------------------
+    // P0: recycle rejects view that is still attached to a parent
+    // ---------------------------------------------------------------
+    @Test
+    fun `recycle rejects view that is still attached to a parent`() {
+        val parent = LinearLayout(context)
+        val view = View(context)
+        parent.addView(view)
+
+        pool.recycle(LAYOUT_ID, view)
+
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(0)
+    }
+
+    @Test
+    fun `recycle accepts view after it is removed from parent`() {
+        val parent = LinearLayout(context)
+        val view = View(context)
+        parent.addView(view)
+        parent.removeView(view)
+
+        pool.recycle(LAYOUT_ID, view)
+
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(1)
+        assertThat(pool.obtain(LAYOUT_ID, context)).isSameInstanceAs(view)
+    }
+
+    // ---------------------------------------------------------------
+    // P0: obtain bounded attempts — incompatible views are preserved
+    // ---------------------------------------------------------------
+    @Test
+    fun `obtain skips incompatible views and returns first compatible one`() {
+        // View with FrameLayout params — incompatible with LinearLayout parent
+        val incompatible = View(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        // View with LinearLayout params — compatible
+        val compatible = View(context).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        pool.recycle(LAYOUT_ID, incompatible)
+        pool.recycle(LAYOUT_ID, compatible)
+
+        val linearParent = LinearLayout(context)
+        val obtained = pool.obtain(LAYOUT_ID, context, linearParent)
+
+        assertThat(obtained).isSameInstanceAs(compatible)
+        // incompatible view should still be in the pool
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(1)
+    }
+
+    @Test
+    fun `obtain returns null when all views are incompatible and preserves them`() {
+        val view1 = View(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        val view2 = View(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        pool.recycle(LAYOUT_ID, view1)
+        pool.recycle(LAYOUT_ID, view2)
+
+        val linearParent = LinearLayout(context)
+        val obtained = pool.obtain(LAYOUT_ID, context, linearParent)
+
+        assertThat(obtained).isNull()
+        // Both views should still be in the pool for a future compatible parent
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(2)
+    }
+
+    // ---------------------------------------------------------------
+    // Host isolation (opt-in)
+    // ---------------------------------------------------------------
+    @Test
+    fun `host isolation off — views shared across all contexts`() {
+        assertThat(pool.isHostIsolationEnabled()).isFalse()
+
+        val view = View(context)
+        pool.recycle(LAYOUT_ID, view)
+
+        // Same context obtains it
+        assertThat(pool.obtain(LAYOUT_ID, context)).isSameInstanceAs(view)
+    }
+
+    @Test
+    fun `setHostIsolation clears pool when toggled`() {
+        pool.recycle(LAYOUT_ID, View(context))
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(1)
+
+        pool.setHostIsolation(true)
+
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(0)
+    }
+
+    @Test
+    fun `setHostIsolation same value does not clear pool`() {
+        pool.recycle(LAYOUT_ID, View(context))
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(1)
+
+        pool.setHostIsolation(false) // same as default
+        assertThat(pool.poolSize(LAYOUT_ID, context)).isEqualTo(1)
+    }
+
+    // ---------------------------------------------------------------
+    // Host isolation — core semantics
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `host isolation — app context view not obtained by activity context`() {
+        pool.setHostIsolation(true)
+
+        val appContext = ApplicationProvider.getApplicationContext<Context>()
+        val activity = Robolectric.buildActivity(Activity::class.java).create().get()
+
+        val view = View(appContext)
+        pool.recycle(LAYOUT_ID, view)
+
+        // App context 桶有 view
+        assertThat(pool.poolSize(LAYOUT_ID, appContext)).isEqualTo(1)
+        // Activity context 桶为空，obtain 不到
+        assertThat(pool.obtain(LAYOUT_ID, activity)).isNull()
+        // App context 自己能 obtain 回来
+        assertThat(pool.obtain(LAYOUT_ID, appContext)).isSameInstanceAs(view)
+    }
+
+    @Test
+    fun `host isolation — two activities do not share views`() {
+        pool.setHostIsolation(true)
+
+        val activityA = Robolectric.buildActivity(Activity::class.java).create().get()
+        val activityB = Robolectric.buildActivity(Activity::class.java).create().get()
+
+        val viewA = View(activityA)
+        pool.recycle(LAYOUT_ID, viewA)
+
+        // Activity B 拿不到 Activity A 的 view
+        assertThat(pool.obtain(LAYOUT_ID, activityB)).isNull()
+        // Activity A 自己能拿到
+        assertThat(pool.obtain(LAYOUT_ID, activityA)).isSameInstanceAs(viewA)
+    }
+
+    @Test
+    fun `host isolation — clearForHost only clears target activity bucket`() {
+        pool.setHostIsolation(true)
+
+        val activityA = Robolectric.buildActivity(Activity::class.java).create().get()
+        val activityB = Robolectric.buildActivity(Activity::class.java).create().get()
+
+        pool.recycle(LAYOUT_ID, View(activityA))
+        pool.recycle(LAYOUT_ID, View(activityB))
+
+        assertThat(pool.poolSize(LAYOUT_ID, activityA)).isEqualTo(1)
+        assertThat(pool.poolSize(LAYOUT_ID, activityB)).isEqualTo(1)
+
+        pool.clearForHost(activityA)
+
+        // A 的桶被清空
+        assertThat(pool.poolSize(LAYOUT_ID, activityA)).isEqualTo(0)
+        assertThat(pool.obtain(LAYOUT_ID, activityA)).isNull()
+        // B 的桶不受影响
+        assertThat(pool.poolSize(LAYOUT_ID, activityB)).isEqualTo(1)
+        assertThat(pool.obtain(LAYOUT_ID, activityB)).isNotNull()
     }
 }

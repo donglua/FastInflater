@@ -18,7 +18,7 @@ dependencyResolutionManagement {
 
 // build.gradle.kts
 dependencies {
-    implementation("com.github.donglua:FastInflater:v0.5.0")
+    implementation("com.github.donglua:FastInflater:v0.5.1")
 }
 ```
 
@@ -111,7 +111,9 @@ val binding = FastDataBinding.inflate<ItemFeedBinding>(
 
 ### 自定义回收策略
 
-默认 `ViewCleaner` 只清理 Android 基础 View 状态，例如文本、图片、listener、alpha、translation、scale、scroll 和动画。业务自定义状态不会被自动识别，例如：
+默认 `ViewCleaner` 只清理 Android 基础 View 状态，例如文本、图片、listener、alpha、translation、scale、scroll 和动画。**此外还会将 `visibility` 归一化为 `VISIBLE`、`isEnabled` 归一化为 `true`、`isSelected`/`isActivated` 归一化为 `false`、`contentDescription` 清空。** 如果布局 XML 中某些子 View 的静态默认值不是这些（例如默认 `GONE` 的占位 View、默认 `disabled` 的按钮、固定的无障碍文案），复用后需要在 bind 阶段或 `ViewRecyclePolicy.onObtain()` 中恢复。
+
+业务自定义状态不会被自动识别，例如：
 
 - 自定义 View 内部的展开/折叠变量、选中缓存、加载状态
 - 运行时替换的特殊背景、前景、Drawable callback

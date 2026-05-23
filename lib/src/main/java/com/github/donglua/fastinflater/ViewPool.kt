@@ -1,8 +1,11 @@
 package com.github.donglua.fastinflater
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.os.Handler
 import android.os.Looper
+import android.util.Xml
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -30,10 +33,9 @@ class ViewPool {
     }
 
     /**
-     * Pool key 用 Long 表示。
-     * - 默认（factoryIsolation = false）：key = layoutId（直接放低 32 位），不访问 Context
-     * - 开启 factory 隔离时：高 32 位 layoutId，低 32 位 factory hash
-     * 用 Long 而非 data class 是为了避免每次 obtain/recycle 都分配对象。
+     * Pool key 用 Long 表示，避免每次 obtain/recycle 分配对象。
+     * - 高 32 位：layoutId
+     * - 低 32 位：隔离 hash（hostHash xor factoryHash，两者都关时为 0）
      */
     private val pool = ConcurrentHashMap<Long, ConcurrentLinkedDeque<View>>()
     private val policies = ConcurrentHashMap<Int, ViewRecyclePolicy>()
@@ -57,6 +59,20 @@ class ViewPool {
 
     @Volatile
     private var factoryIsolation = false
+
+    /**
+     * 开启/关闭 host（Activity）隔离。默认关闭。
+     *
+     * 开启后 pool key 包含 Activity identityHashCode，
+     * 不同 Activity 的 View 不会串池，避免 context/theme 不一致导致的 UI 异常。
+     *
+     * 注意：开启后 Application context 预热的 View 进入独立桶（hostHash=0），
+     * 不会被 Activity context 的 obtain 命中。请改用 Activity context 做 warmUp。
+     *
+     * 关闭时所有 context 共享同一个桶，适合全局 theme 一致的项目（绝大多数情况）。
+     */
+    @Volatile
+    private var hostIsolation = false
 
     private var defaultMaxPoolSize = 4
 
@@ -94,6 +110,47 @@ class ViewPool {
     fun isFactoryIsolationEnabled(): Boolean = factoryIsolation
 
     /**
+     * 开启/关闭 host（Activity）隔离。默认关闭。
+     *
+     * 开启后不同 Activity 的 View 不会串池，Application context 预热的 View 进入共享桶。
+     * 关闭后所有 context 共享同一个桶，适合全局 theme 一致的项目（绝大多数情况）。
+     *
+     * 切换时会清空池。
+     */
+    fun setHostIsolation(enabled: Boolean) {
+        if (hostIsolation == enabled) return
+        hostIsolation = enabled
+        clear()
+    }
+
+    fun isHostIsolationEnabled(): Boolean = hostIsolation
+
+    /**
+     * 清除指定 Activity 关联的所有池条目。
+     * 在 Activity.onDestroy 时调用，避免池中 View 持有已销毁 Activity 的 context。
+     *
+     * - hostIsolation 关闭：退化为 [clear]（无法按 host 区分）。
+     * - hostIsolation + factoryIsolation 同时开启：低 32 位是 hostHash xor factoryHash，
+     *   无法仅凭 activityHash 精确匹配，退化为 [clear] 避免泄漏。
+     * - 仅 hostIsolation 开启：精确删除低 32 位等于 activityHash 的条目。
+     */
+    fun clearForHost(activity: Activity) {
+        if (!hostIsolation || factoryIsolation) {
+            clear()
+            return
+        }
+        poolGeneration.incrementAndGet()
+        val activityHash = System.identityHashCode(activity)
+        val mask = 0xFFFFFFFFL
+        pool.keys.removeIf { key ->
+            (key and mask).toInt() == activityHash
+        }
+        warmingCounts.keys.removeIf { key ->
+            (key and mask).toInt() == activityHash
+        }
+    }
+
+    /**
      * 控制某个布局是否允许进入 FastInflater 池。
      *
      * 对于在构造、attach 或 bind 阶段注册全局 EventBus、宿主 Lifecycle observer、
@@ -121,30 +178,51 @@ class ViewPool {
      *
      * 池中的 View 在 [recycle] 时已经被清理过（默认 [ViewCleaner.clean] 或 [ViewRecyclePolicy.onRecycle]），
      * View 处于 detached 状态、不会被外部修改，所以这里不再重复清理整棵 View 树。
+     *
+     * 并发安全：用有界尝试（snapshot size）替代无界 while 循环，避免并发 offer 导致的活锁。
+     * 不兼容的 View 暂存本地列表，最后统一放回队尾，保留给后续兼容的 parent 使用。
      */
     fun obtain(@LayoutRes layoutId: Int, context: Context, parent: ViewGroup? = null): View? {
         if (isPoolingDisabled(layoutId)) return null
         val key = keyFor(layoutId, context)
+        return pollCompatible(key, layoutId, context, parent)
+    }
+
+    /**
+     * 从指定 deque 中 poll 出第一个与 parent 兼容的 View。
+     * 最多尝试 deque 当前 size 次（快照），不兼容的 View 暂存后统一放回队尾。
+     */
+    private fun pollCompatible(
+        key: Long,
+        @LayoutRes layoutId: Int,
+        context: Context,
+        parent: ViewGroup?
+    ): View? {
         val deque = pool[key] ?: return null
-        while (true) {
-            val view = deque.poll() ?: return null
-            if (!canAttachToParent(parent, view)) {
-                deque.offerLast(view)
-                val remaining = (deque.size - 1).coerceAtLeast(0)
-                repeat(remaining) {
-                    val next = deque.poll() ?: return null
-                    if (canAttachToParent(parent, next)) {
-                        policies[layoutId]?.onObtain(next)
-                        return next
-                    }
-                    deque.offerLast(next)
-                }
-                return null
+        val maxAttempts = deque.size
+        if (maxAttempts == 0) return null
+
+        val rejected = ArrayList<View>(4)
+        var found: View? = null
+
+        for (i in 0 until maxAttempts) {
+            val view = deque.poll() ?: break
+            if (ensureAttachableToParent(layoutId, context, parent, view)) {
+                found = view
+                break
             }
-            // 只跑用户自定义的 onObtain 钩子；默认情况下 obtain 是纯 poll
-            policies[layoutId]?.onObtain(view)
-            return view
+            rejected.add(view)
         }
+
+        // 不兼容的 View 放回队尾，保留给后续兼容的 parent 使用
+        for (view in rejected) {
+            deque.offerLast(view)
+        }
+
+        if (found != null) {
+            policies[layoutId]?.onObtain(found)
+        }
+        return found
     }
 
     /**
@@ -376,12 +454,14 @@ class ViewPool {
     }
 
     private fun clearLayout(@LayoutRes layoutId: Int) {
-        if (!factoryIsolation) {
-            val key = layoutId.toLong()
+        if (!hostIsolation && !factoryIsolation) {
+            // 无隔离模式：key = layoutId << 32，直接移除
+            val key = layoutId.toLong() shl 32
             pool.remove(key)
             warmingCounts.remove(key)
             return
         }
+        // 有隔离模式：高 32 位匹配 layoutId 的所有 key 都要移除
         pool.keys.removeIf { key ->
             (key ushr 32).toInt() == layoutId
         }
@@ -427,16 +507,47 @@ class ViewPool {
     }
 
     /**
-     * 计算 pool key。默认仅基于 layoutId，零额外开销、不访问 Context。
-     * 开启 factoryIsolation 时，把 LayoutInflater.factory2 的 class hash 编入低 32 位。
+     * 计算 pool key。
+     * - 高 32 位始终为 layoutId
+     * - 低 32 位根据隔离模式组合 hostHash 和 factoryHash
+     *   - hostIsolation=true: 包含 Activity identityHashCode（Application context 为 0）
+     *   - factoryIsolation=true: 包含 LayoutInflater.factory2 的 class hashCode
+     *   - 两者都关: 低 32 位为 0，等价于旧行为
      */
     private fun keyFor(@LayoutRes layoutId: Int, context: Context): Long {
-        if (!factoryIsolation) {
-            return layoutId.toLong()
+        val high = layoutId.toLong() shl 32
+        if (!hostIsolation && !factoryIsolation) {
+            return high
         }
-        // 高 32 位 layoutId，低 32 位 factory hash
-        val hash = factoryHash(context)
-        return (layoutId.toLong() shl 32) or (hash.toLong() and 0xFFFFFFFFL)
+        var low = 0
+        if (hostIsolation) {
+            low = hostHash(context)
+        }
+        if (factoryIsolation) {
+            low = low xor factoryHash(context)
+        }
+        return high or (low.toLong() and 0xFFFFFFFFL)
+    }
+
+    /**
+     * 返回 context 所属 Activity 的 identityHashCode，用于 host 隔离。
+     * 非 Activity context（Application / Service）返回 0，进入共享桶。
+     */
+    private fun hostHash(context: Context): Int {
+        val activity = unwrapActivity(context) ?: return 0
+        return System.identityHashCode(activity)
+    }
+
+    /**
+     * 沿 ContextWrapper 链向上查找 Activity。
+     */
+    private fun unwrapActivity(context: Context): Activity? {
+        var ctx: Context? = context
+        while (ctx != null) {
+            if (ctx is Activity) return ctx
+            ctx = if (ctx is ContextWrapper) ctx.baseContext else null
+        }
+        return null
     }
 
     private fun factoryHash(context: Context): Int {
@@ -488,7 +599,59 @@ class ViewPool {
     }
 
     private fun canEnterPool(@LayoutRes layoutId: Int, view: View): Boolean {
+        // 仍 attached 的 view 不能入池：下一次 obtain + parent.addView 会抛 IllegalStateException
+        // 如果业务确认安全（已经 detach 或者 parent 即将丢弃），可以注册 ViewRecyclePolicy 覆盖默认行为
+        if (view.parent != null) {
+            val policy = policies[layoutId] ?: return false
+            return policy.canRecycle(view)
+        }
         return policies[layoutId]?.canRecycle(view) ?: true
+    }
+
+    private fun ensureAttachableToParent(
+        @LayoutRes layoutId: Int,
+        context: Context,
+        parent: ViewGroup?,
+        view: View
+    ): Boolean {
+        parent ?: return true
+        val params = view.layoutParams
+        if (params == null || !canAttachToParent(parent, view)) {
+            view.layoutParams = generateRootLayoutParams(context, layoutId, parent) ?: return params == null
+        }
+        return canAttachToParent(parent, view)
+    }
+
+    private fun generateRootLayoutParams(
+        context: Context,
+        @LayoutRes layoutId: Int,
+        parent: ViewGroup
+    ): ViewGroup.LayoutParams? {
+        val parser = runCatching { context.resources.getLayout(layoutId) }.getOrNull() ?: return null
+        try {
+            var dataDepth = -1
+            var eventType = parser.eventType
+            while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG) {
+                    val tagName = parser.name
+                    if (tagName == "data") {
+                        dataDepth = parser.depth
+                    } else if (tagName != "layout" && dataDepth < 0) {
+                        return runCatching {
+                            parent.generateLayoutParams(Xml.asAttributeSet(parser))
+                        }.getOrNull()
+                    }
+                } else if (eventType == org.xmlpull.v1.XmlPullParser.END_TAG &&
+                    dataDepth == parser.depth && parser.name == "data"
+                ) {
+                    dataDepth = -1
+                }
+                eventType = parser.next()
+            }
+        } finally {
+            parser.close()
+        }
+        return null
     }
 
     private fun canAttachToParent(parent: ViewGroup?, view: View): Boolean {

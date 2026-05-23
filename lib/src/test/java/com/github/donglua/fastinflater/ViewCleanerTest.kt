@@ -320,4 +320,60 @@ class ViewCleanerTest {
         assertThat(parent.scaleX).isEqualTo(1f)
         assertThat(parent.rotation).isEqualTo(0f)
     }
+
+    // ── Visibility / Enabled / Selected / Activated / ContentDescription ──
+
+    @Test
+    fun `clean resets visibility to VISIBLE`() {
+        val view = View(context).apply { visibility = View.GONE }
+
+        ViewCleaner.clean(view)
+
+        assertThat(view.visibility).isEqualTo(View.VISIBLE)
+    }
+
+    @Test
+    fun `clean resets isEnabled to true`() {
+        val view = View(context).apply { isEnabled = false }
+
+        ViewCleaner.clean(view)
+
+        assertThat(view.isEnabled).isTrue()
+    }
+
+    @Test
+    fun `clean resets isSelected to false`() {
+        val view = View(context).apply { isSelected = true }
+
+        ViewCleaner.clean(view)
+
+        assertThat(view.isSelected).isFalse()
+    }
+
+    @Test
+    fun `clean resets isActivated to false`() {
+        val view = View(context).apply { isActivated = true }
+
+        ViewCleaner.clean(view)
+
+        assertThat(view.isActivated).isFalse()
+    }
+
+    @Test
+    fun `clean clears contentDescription`() {
+        val view = View(context).apply { contentDescription = "test desc" }
+
+        ViewCleaner.clean(view)
+
+        assertThat(view.contentDescription).isNull()
+    }
+
+    @Test
+    fun `clean resets CompoundButton isChecked to false`() {
+        val checkBox = CheckBox(context).apply { isChecked = true }
+
+        ViewCleaner.clean(checkBox)
+
+        assertThat(checkBox.isChecked).isFalse()
+    }
 }

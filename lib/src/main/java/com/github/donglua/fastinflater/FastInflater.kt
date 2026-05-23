@@ -52,7 +52,7 @@ class FastInflater private constructor(context: Context) {
                 override fun onActivityStopped(activity: Activity) = Unit
                 override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
                 override fun onActivityDestroyed(activity: Activity) {
-                    viewPool.clear()
+                    viewPool.clearForHost(activity)
                 }
             }
         )
@@ -232,6 +232,23 @@ class FastInflater private constructor(context: Context) {
      */
     fun setFactoryIsolation(enabled: Boolean) {
         viewPool.setFactoryIsolation(enabled)
+    }
+
+    /**
+     * 开启/关闭 host（Activity）隔离。默认关闭。
+     *
+     * 开启后不同 Activity 的 View 不会串池，避免 context/theme 不一致导致的 UI 异常。
+     * 关闭后所有 context 共享同一个桶，适合全局 theme 一致的项目（绝大多数情况）。
+     *
+     * 开启后建议用 Activity context 做 warmUp，以确保预热的 View 进入对应 Activity 的桶。
+     * 切换时会清空池。
+     */
+    fun setHostIsolation(enabled: Boolean) {
+        viewPool.setHostIsolation(enabled)
+    }
+
+    fun isHostIsolationEnabled(): Boolean {
+        return viewPool.isHostIsolationEnabled()
     }
 
     /**
