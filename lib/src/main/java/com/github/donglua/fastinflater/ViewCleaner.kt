@@ -46,15 +46,11 @@ object ViewCleaner {
         if (view is TextView) {
             view.text = null
             view.setOnEditorActionListener(null)
-        }
-        if (view is ImageView) {
+            if (view is CompoundButton) {
+                view.setOnCheckedChangeListener(null)
+            }
+        } else if (view is ImageView) {
             view.setImageDrawable(null)
-        }
-        if (view is EditText) {
-            view.text = null
-        }
-        if (view is CompoundButton) {
-            view.setOnCheckedChangeListener(null)
         }
     }
 }
