@@ -4,7 +4,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import android.widget.ImageView
-import android.widget.EditText
 import android.widget.CompoundButton
 
 object ViewCleaner {
@@ -55,16 +54,12 @@ object ViewCleaner {
         if (view is TextView) {
             view.text = null
             view.setOnEditorActionListener(null)
-        }
-        if (view is ImageView) {
+            if (view is CompoundButton) {
+                view.setOnCheckedChangeListener(null)
+                view.isChecked = false
+            }
+        } else if (view is ImageView) {
             view.setImageDrawable(null)
-        }
-        if (view is EditText) {
-            view.text = null
-        }
-        if (view is CompoundButton) {
-            view.setOnCheckedChangeListener(null)
-            view.isChecked = false
         }
     }
 }
