@@ -242,7 +242,11 @@ PoolStats.enabled = false
 
 ### 主线程依赖的布局
 
-部分 View 不能后台 inflate（ComposeView、WebView、含 LiveData/Handler/GestureDetector 的自定义 View）。FastInflater 会优先识别已知主线程组件，并直接降级到主线程 IdleHandler；未知自定义 View 仍会先尝试后台 inflate，如果触发主线程依赖异常，会记录该布局和 View 类，后续 warmUp 不再反复后台试错。也可以预先标记：
+部分 View 不能后台 inflate（ComposeView、WebView、含 LiveData/Handler/GestureDetector 的自定义 View）。FastInflater 会优先识别已知主线程组件，并直接降级到主线程 IdleHandler；未知自定义 View 仍会先尝试后台 inflate，如果触发明确的主线程依赖异常，会记录该布局和 View 类，后续 warmUp 不再反复后台试错。普通自定义 View 的类解析失败、构造异常或 XML 错误只会上报 `onBackgroundInflateFailed()`，不会自动标记为主线程依赖，也不会说明该 layout 适合池化。
+
+注意：主线程 fallback 只表示“创建必须在主线程”，不是“复用生命周期安全”。如果这个自定义 View 会注册 EventBus、Lifecycle observer、Activity callback 或广播监听，仍需按上面的“生命周期敏感布局”规则关闭池化，或提供完整的 `ViewRecyclePolicy` 解绑/恢复策略。
+
+也可以预先标记：
 
 ```kotlin
 FastInflater.get().markAsMainThreadOnly(R.layout.fragment_compose_view)

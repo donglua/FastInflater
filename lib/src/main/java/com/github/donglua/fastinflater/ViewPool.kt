@@ -306,21 +306,24 @@ class ViewPool {
                         deque.offer(view)
                     }
                 } catch (e: Throwable) {
-                    // 后台 inflate 失败，多半是组件依赖主线程（ComposeView/LiveData/WebView 等）
-                    // 标记后续 warmUp 走主线程，并把剩余预热数量降级到主线程
-                    if (WarmUpFallbackClassifier.isMainThreadDependencyFailure(e)) {
+                    // 只有明确的主线程依赖异常才降级到主线程；普通布局/类解析失败不应污染后续语义。
+                    val isMainThreadDependency =
+                        WarmUpFallbackClassifier.isMainThreadDependencyFailure(e)
+                    if (isMainThreadDependency) {
                         WarmUpFallbackClassifier.extractInflatingClassName(e)
                             ?.let(mainThreadOnlyViewClasses::add)
-                    }
-                    val newlyMarked = mainThreadOnly.add(layoutId)
-                    warmUpListener?.onBackgroundInflateFailed(layoutId, e)
-                    if (newlyMarked) {
-                        warmUpListener?.onMarkedAsMainThreadOnly(layoutId)
-                    }
-                    val remaining = warmCount - i
-                    if (remaining > 0) {
-                        warmUpOnMainIdle(contextRef, layoutId, key, remaining, generation)
-                        transferredToMain = true
+                        val newlyMarked = mainThreadOnly.add(layoutId)
+                        warmUpListener?.onBackgroundInflateFailed(layoutId, e)
+                        if (newlyMarked) {
+                            warmUpListener?.onMarkedAsMainThreadOnly(layoutId)
+                        }
+                        val remaining = warmCount - i
+                        if (remaining > 0) {
+                            warmUpOnMainIdle(contextRef, layoutId, key, remaining, generation)
+                            transferredToMain = true
+                        }
+                    } else {
+                        warmUpListener?.onBackgroundInflateFailed(layoutId, e)
                     }
                     return@execute
                 } finally {

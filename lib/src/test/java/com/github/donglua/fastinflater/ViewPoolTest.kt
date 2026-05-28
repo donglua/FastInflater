@@ -9,6 +9,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -623,6 +625,26 @@ class ViewPoolTest {
         pool.markAsMainThreadOnly(LAYOUT_ID)
         pool.markAsMainThreadOnly(LAYOUT_ID)
         assertThat(callCount).isEqualTo(1)
+    }
+
+    @Test
+    fun `warmUp does not mark ordinary custom view inflate failure as main thread only`() {
+        val layoutId = context.resources.getIdentifier(
+            "fast_inflater_missing_custom_view",
+            "layout",
+            "com.github.donglua.fastinflater.test"
+        )
+        val failureObserved = CountDownLatch(1)
+        pool.setWarmUpListener(object : ViewPool.WarmUpListener {
+            override fun onBackgroundInflateFailed(layoutId: Int, error: Throwable) {
+                failureObserved.countDown()
+            }
+        })
+
+        pool.warmUp(context, layoutId, 1)
+
+        assertThat(failureObserved.await(5, TimeUnit.SECONDS)).isTrue()
+        assertThat(pool.isMainThreadOnly(layoutId)).isFalse()
     }
 
     // ---------------------------------------------------------------

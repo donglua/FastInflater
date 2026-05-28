@@ -148,6 +148,12 @@ class WarmUpFallbackClassifierTest {
     }
 
     @Test
+    fun `isMainThreadDependencyFailure returns false for ordinary custom view inflate failure`() {
+        val error = RuntimeException("Error inflating class com.example.MyView")
+        assertThat(WarmUpFallbackClassifier.isMainThreadDependencyFailure(error)).isFalse()
+    }
+
+    @Test
     fun `isMainThreadDependencyFailure returns false for null message`() {
         val error = RuntimeException(null as String?)
         assertThat(WarmUpFallbackClassifier.isMainThreadDependencyFailure(error)).isFalse()
